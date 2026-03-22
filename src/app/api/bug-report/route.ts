@@ -63,12 +63,15 @@ export async function POST(req: NextRequest) {
       try {
         // Step 1: Upload screenshot to repo if present
         let screenshotGitUrl = '';
+        let screenshotUploadError = '';
+        let screenshotFilename = '';
+        
         if (screenshotDataUrl) {
           try {
             const base64Data = screenshotDataUrl.replace(/^data:image\/\w+;base64,/, '');
-            const filename = `bug-screenshots/${reportId}.png`;
+            screenshotFilename = `bug-screenshots/${reportId}.png`;
             const uploadRes = await fetch(
-              `https://api.github.com/repos/${repo}/contents/${filename}`,
+              `https://api.github.com/repos/${repo}/contents/${screenshotFilename}`,
               {
                 method: 'PUT',
                 headers: {
@@ -84,13 +87,21 @@ export async function POST(req: NextRequest) {
             );
             if (uploadRes.ok) {
               const uploadData = await uploadRes.json();
-              screenshotGitUrl = uploadData.content?.download_url || '';
+              // Use the github.com raw blob URL so it respects repo visibility without exposing a token
+              screenshotGitUrl = `https://github.com/${repo}/blob/main/${screenshotFilename}?raw=true`;
               console.log(`[BugReport] Screenshot uploaded: ${screenshotGitUrl}`);
             } else {
-              console.warn(`[BugReport] Screenshot upload failed: ${await uploadRes.text()}`);
+              const errText = await uploadRes.text();
+              console.warn(`[BugReport] Screenshot upload failed: ${errText}`);
+              try {
+                screenshotUploadError = JSON.parse(errText).message || errText;
+              } catch {
+                screenshotUploadError = errText;
+              }
             }
-          } catch (err) {
+          } catch (err: any) {
             console.warn('[BugReport] Screenshot upload error:', err);
+            screenshotUploadError = err.message;
           }
         }
 
@@ -102,6 +113,8 @@ export async function POST(req: NextRequest) {
 
         if (screenshotGitUrl) {
           issueParts.push(`\n### Screenshot\n![Screenshot](${screenshotGitUrl})`);
+        } else if (screenshotDataUrl) {
+          issueParts.push(`\n### Screenshot\n> [!WARNING]\n> Failed to upload screenshot to GitHub: **${screenshotUploadError}**\n\nThe screenshot was captured but could not be attached here. It is saved locally on the server at:\n\`${screenshotPath}\``);
         }
 
         // Trim logs to fit within GitHub's 65536 char body limit
