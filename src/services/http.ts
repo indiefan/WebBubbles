@@ -160,6 +160,12 @@ export class HttpService {
     return this.request('DELETE', `/chat/${encodeURIComponent(guid)}`);
   }
 
+  createChat(addresses: string[], service: "iMessage" | "SMS" = "iMessage") {
+    return this.request('POST', '/chat/new', {
+      body: { addresses, service },
+    });
+  }
+
   // ─── Messages ────────────────────────────────────────
   queryMessages(opts: {
     withQuery?: string[];

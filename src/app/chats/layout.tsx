@@ -11,6 +11,8 @@ import { socketService } from "@/services/socket";
 import { registerActionHandlers } from "@/services/actionHandler";
 import { db } from "@/lib/db";
 import { formatDistanceToNow } from "date-fns";
+import { NewChatModal } from "@/components/chat/NewChatModal";
+import { SearchPanel } from "@/components/search/SearchPanel";
 
 export default function ChatsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -20,6 +22,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const { resolveChatDisplayName, resolveDisplayName, loaded: contactsLoaded } = useContactStore();
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
 
   useEffect(() => {
     if (!isSetup) {
@@ -143,6 +147,44 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                 <line x1="21" y1="12" x2="9" y2="12" />
               </svg>
             </button>
+            {/* Search messages button */}
+            <button
+              onClick={() => setShowSearch(true)}
+              title="Search Messages"
+              style={{
+                background: "var(--accent)",
+                border: "none",
+                borderRadius: "50%",
+                width: 24,
+                height: 24,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </button>
+            {/* New chat button */}
+            <button
+              onClick={() => setShowNewChat(true)}
+              title="New Chat"
+              style={{
+                background: "var(--accent)",
+                border: "none",
+                borderRadius: "50%",
+                width: 24,
+                height: 24,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
           </div>
         </div>
 
@@ -213,6 +255,9 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
       {/* Main */}
       <div className="main-view">{children}</div>
+
+      {showNewChat && <NewChatModal onClose={() => setShowNewChat(false)} />}
+      {showSearch && <SearchPanel onClose={() => setShowSearch(false)} />}
     </div>
   );
 }
