@@ -4,7 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { BlueBubblesDB } from '@/lib/db';
 import { HttpService } from '@/services/http';
-import { serverMessageToRecord, serverChatToRecord } from '@/services/actionHandler';
+import { serverMessageToRecord, serverChatToRecord, handleNewMessage } from '@/services/actionHandler';
+import { useMessageStore } from '@/stores/messageStore';
 import { MockServer } from '@/test/mockServer';
 import {
   mockPingResponse,
@@ -254,5 +255,48 @@ describe('Full Sync Integration', () => {
     await Promise.all(promises);
     const count = await db.messages.count();
     expect(count).toBe(100);
+  });
+
+  it('new message event: handles tempGuid replacement when socket beats HTTP response', async () => {
+    // We must use the global db because actionHandler uses it directly
+    const { db: globalDb } = await import('@/lib/db');
+    
+    const tempGuid = `temp-${Date.now()}-socket-race`;
+    const optimistic = serverMessageToRecord(
+      mockMessageData({
+        guid: tempGuid,
+        text: 'Optimistic socket race',
+        isFromMe: true,
+      }),
+    );
+    await globalDb.messages.put(optimistic);
+    useMessageStore.getState().addMessage(optimistic);
+
+    const realGuid = `real-${tempGuid}`;
+    const newMsgData = mockMessageData({
+      guid: realGuid,
+      text: 'Optimistic socket race',
+      isFromMe: true,
+      dateCreated: Date.now(),
+    });
+    // Add tempGuid to the payload
+    (newMsgData as any).tempGuid = tempGuid;
+
+    await handleNewMessage(newMsgData);
+
+    const deletedTemp = await globalDb.messages.get(tempGuid);
+    expect(deletedTemp).toBeUndefined();
+
+    const realMsg = await globalDb.messages.get(realGuid);
+    expect(realMsg).toBeDefined();
+
+    const state = useMessageStore.getState();
+    const storeMsgs = state.messages.filter(m => m.text === 'Optimistic socket race');
+    expect(storeMsgs).toHaveLength(1);
+    expect(storeMsgs[0].guid).toBe(realGuid);
+    
+    // Cleanup
+    useMessageStore.getState().clear();
+    await globalDb.messages.delete(realGuid);
   });
 });

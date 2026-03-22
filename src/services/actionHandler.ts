@@ -90,6 +90,13 @@ async function handleNewMessage(rawData: any) {
 
   const msg = serverMessageToRecord(data);
 
+  // If the server tells us this was an optimistic message, clean up the temp record.
+  if (data.tempGuid) {
+    await db.messages.delete(data.tempGuid);
+    // Replace the temp message in the store to avoid duplicates if socket beats HTTP
+    useMessageStore.getState().replaceTempGuid(data.tempGuid, msg.guid, msg);
+  }
+
   // Upsert to IndexedDB
   await db.messages.put(msg);
 
