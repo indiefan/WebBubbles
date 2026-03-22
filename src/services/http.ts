@@ -202,7 +202,6 @@ export class HttpService {
         chatGuid,
         tempGuid,
         message: message || (opts.subject ? ' ' : ''),
-        // Use private-api by default — apple-script hangs on newer macOS
         method: opts.method ?? 'private-api',
         effectId: opts.effectId,
         subject: opts.subject,
@@ -210,6 +209,18 @@ export class HttpService {
         partIndex: opts.partIndex,
       },
       timeoutMs: 60_000,
+    });
+  }
+
+  sendAttachment(chatGuid: string, tempGuid: string, file: File, opts: { message?: string } = {}) {
+    const formData = new FormData();
+    formData.append('chatGuid', chatGuid);
+    formData.append('tempGuid', tempGuid);
+    if (opts.message) formData.append('message', opts.message);
+    formData.append('attachment', file);
+    return this.request('POST', '/message/attachment', {
+      body: formData,
+      timeoutMs: 120_000,
     });
   }
 
@@ -231,6 +242,12 @@ export class HttpService {
     return this.request('GET', `/attachment/${encodeURIComponent(guid)}/download`, {
       responseType: 'blob',
       signal,
+    });
+  }
+
+  attachmentBlurhash(guid: string, opts: { height?: number; width?: number; quality?: number } = {}) {
+    return this.request('GET', `/attachment/${encodeURIComponent(guid)}/blurhash`, {
+      query: { height: opts.height, width: opts.width, quality: opts.quality },
     });
   }
 

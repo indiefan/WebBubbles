@@ -7,16 +7,15 @@ import { useContactStore } from "@/stores/contactStore";
 import { db, MessageRecord } from "@/lib/db";
 import { http } from "@/services/http";
 import { serverMessageToRecord } from "@/services/actionHandler";
-import { outgoingQueue } from "@/services/outgoingQueue";
 import { format, isToday, isYesterday } from "date-fns";
+import { ComposeArea } from "@/components/chat/ComposeArea";
+import { MessageBubble } from "@/components/chat/MessageBubble";
 
 export default function MessageView({ params }: { params: Promise<{ guid: string }> }) {
   const { guid: rawGuid } = use(params);
   const guid = decodeURIComponent(rawGuid);
 
   const { messages, loading, setMessages, setLoading, setHasMore, clear } = useMessageStore();
-  const [text, setText] = useState("");
-  const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -44,27 +43,6 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
       });
     }
   }, [messages]);
-
-  // Load draft from IndexedDB
-  useEffect(() => {
-    db.drafts.get(guid).then((d) => {
-      if (d) {
-        setText(d.text);
-        setDraft(d.text);
-      }
-    });
-  }, [guid]);
-
-  // Auto-save draft
-  useEffect(() => {
-    if (text !== draft) {
-      const timer = setTimeout(() => {
-        db.drafts.put({ chatGuid: guid, text, attachmentPaths: [], updatedAt: Date.now() });
-        setDraft(text);
-      }, 1000);
-      return () => clearTimeout(timer);
-    }
-  }, [text, draft, guid]);
 
   // Set active chat
   useEffect(() => {
@@ -122,26 +100,6 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     load();
   }, [guid, clear, setMessages, setLoading, setHasMore]);
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!text.trim()) return;
-
-    const messageText = text.trim();
-    setText("");
-
-    // Clear draft
-    db.drafts.delete(guid).catch(() => {});
-
-    // Force scroll to bottom when sending
-    isNearBottomRef.current = true;
-
-    outgoingQueue.enqueue({
-      chatGuid: guid,
-      tempGuid: outgoingQueue.generateTempGuid(),
-      text: messageText,
-    });
-  };
-
   const formatDateSeparator = (ts: number) => {
     const date = new Date(ts);
     if (isToday(date)) return "Today";
@@ -180,35 +138,8 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
         lastDate = msgDate;
       }
 
-      const isTemp = msg.guid.startsWith("temp-");
-      const hasError = msg.error > 0;
-
       elements.push(
-        <div key={msg.guid}>
-          <div className={`message-bubble ${msg.isFromMe ? "sent" : "received"}`} style={{ opacity: isTemp ? 0.6 : 1 }}>
-            {!msg.isFromMe && isGroupChat && msg.handleAddress && (
-              <div style={{
-                fontSize: 11,
-                fontWeight: 600,
-                color: "var(--accent)",
-                marginBottom: 2,
-                opacity: 0.9,
-              }}>
-                {resolveDisplayName(msg.handleAddress)}
-              </div>
-            )}
-            {msg.text || (msg.hasAttachments ? "[Attachment]" : "")}
-          </div>
-          <div style={{
-            textAlign: msg.isFromMe ? "right" : "left",
-            fontSize: 11,
-            color: hasError ? "var(--danger)" : "var(--muted)",
-            padding: "2px 4px",
-            opacity: 0.7,
-          }}>
-            {hasError ? "Failed to send" : isTemp ? "Sending..." : formatTime(msg.dateCreated)}
-          </div>
-        </div>
+        <MessageBubble key={msg.guid} msg={msg} isGroupChat={!!isGroupChat} />
       );
     }
 
@@ -240,21 +171,12 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
         <div ref={messagesEndRef} />
       </div>
 
-      <form className="compose-area" onSubmit={handleSend}>
-        <input
-          type="text"
-          className="compose-input"
-          placeholder="iMessage"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-        <button type="submit" className="send-button" disabled={!text.trim()}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-        </button>
-      </form>
+      <ComposeArea 
+        chatGuid={guid} 
+        onSend={() => {
+          isNearBottomRef.current = true;
+        }} 
+      />
     </div>
   );
 }
