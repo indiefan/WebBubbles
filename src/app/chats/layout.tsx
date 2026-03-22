@@ -127,7 +127,17 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                 useSyncStore.getState().setLastFullSync(null);
                 useSyncStore.getState().reset();
                 useChatStore.getState().setChats([]);
-                try { await db.delete(); } catch {}
+                try {
+                  await Promise.all([
+                    db.chats.clear(),
+                    db.messages.clear(),
+                    db.handles.clear(),
+                    db.attachments.clear(),
+                    db.contacts.clear(),
+                    db.chatParticipants.clear(),
+                    db.drafts.clear(),
+                  ]);
+                } catch {}
                 router.push("/");
               }}
               title="Logout"

@@ -52,7 +52,7 @@ class DownloadService {
 
   async getBlurhash(guid: string): Promise<string | null> {
     try {
-      const res = await http.attachmentBlurhash(guid, { quality: 50 });
+      const res = await http.attachmentBlurhash(guid);
       return res?.data || null;
     } catch (e) {
       console.error("Failed to fetch blurhash", guid, e);
