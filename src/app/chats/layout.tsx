@@ -13,6 +13,7 @@ import { db } from "@/lib/db";
 import { formatDistanceToNow } from "date-fns";
 import { NewChatModal } from "@/components/chat/NewChatModal";
 import { SearchPanel } from "@/components/search/SearchPanel";
+import { syncContacts } from "@/services/sync";
 
 export default function ChatsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -48,6 +49,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
           setChats(cached);
           // Load contacts into memory for display name resolution
           await useContactStore.getState().loadContacts();
+          // Kick off a background contact sync from server
+          syncContacts().then(() => useContactStore.getState().loadContacts()).catch(() => {});
         } else if (useSyncStore.getState().lastFullSync) {
           // Fallback: If localStorage claims we're synced but IndexedDB is empty
           // (browser cleared storage, or database renamed), we must nuke the flag and force a resync!

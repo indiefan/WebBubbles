@@ -166,6 +166,40 @@ export class HttpService {
     });
   }
 
+  addParticipant(chatGuid: string, address: string) {
+    return this.request('POST', `/chat/${encodeURIComponent(chatGuid)}/participant/add`, {
+      body: { address },
+    });
+  }
+
+  removeParticipant(chatGuid: string, address: string) {
+    return this.request('POST', `/chat/${encodeURIComponent(chatGuid)}/participant/remove`, {
+      body: { address },
+    });
+  }
+
+  leaveChat(chatGuid: string) {
+    return this.request('POST', `/chat/${encodeURIComponent(chatGuid)}/leave`);
+  }
+
+  getChatIcon(chatGuid: string): Promise<Blob> {
+    return this.request('GET', `/chat/${encodeURIComponent(chatGuid)}/icon`, {
+      responseType: 'blob',
+    });
+  }
+
+  setChatIcon(chatGuid: string, file: File) {
+    const formData = new FormData();
+    formData.append('icon', file);
+    return this.request('POST', `/chat/${encodeURIComponent(chatGuid)}/icon`, {
+      body: formData,
+    });
+  }
+
+  deleteChatIcon(chatGuid: string) {
+    return this.request('DELETE', `/chat/${encodeURIComponent(chatGuid)}/icon`);
+  }
+
   // ─── Messages ────────────────────────────────────────
   queryMessages(opts: {
     withQuery?: string[];

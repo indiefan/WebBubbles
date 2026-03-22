@@ -10,6 +10,7 @@ import { serverMessageToRecord } from "@/services/actionHandler";
 import { format, isToday, isYesterday } from "date-fns";
 import { ComposeArea } from "@/components/chat/ComposeArea";
 import { MessageBubble } from "@/components/chat/MessageBubble";
+import { ConversationDetails } from "@/components/chat/ConversationDetails";
 
 export default function MessageView({ params }: { params: Promise<{ guid: string }> }) {
   const { guid: rawGuid } = use(params);
@@ -19,6 +20,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const [showDetails, setShowDetails] = useState(false);
 
   // ─── Sticky auto-scroll ──────────────────────────────
   const scrollToBottom = useCallback(() => {
@@ -161,22 +163,35 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const isGroupChat = chat && (chat.participantHandleAddresses?.length ?? 0) > 1;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div className="chat-header">
-        <h3 style={{ fontSize: 16, fontWeight: 600 }}>{chatTitle}</h3>
+    <div style={{ display: "flex", height: "100%" }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
+        <div className="chat-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600 }}>{chatTitle}</h3>
+          <button
+            onClick={() => setShowDetails(!showDetails)}
+            title="Details"
+            style={{ background: "none", border: "none", cursor: "pointer", color: showDetails ? "var(--accent)" : "var(--muted)", padding: 4 }}
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          </button>
+        </div>
+
+        <div className="message-list" ref={messageListRef} onScroll={handleScroll}>
+          {renderMessages()}
+          <div ref={messagesEndRef} />
+        </div>
+
+        <ComposeArea 
+          chatGuid={guid} 
+          onSend={() => {
+            isNearBottomRef.current = true;
+          }} 
+        />
       </div>
 
-      <div className="message-list" ref={messageListRef} onScroll={handleScroll}>
-        {renderMessages()}
-        <div ref={messagesEndRef} />
-      </div>
-
-      <ComposeArea 
-        chatGuid={guid} 
-        onSend={() => {
-          isNearBottomRef.current = true;
-        }} 
-      />
+      {showDetails && chat && (
+        <ConversationDetails chat={chat} onClose={() => setShowDetails(false)} />
+      )}
     </div>
   );
 }
