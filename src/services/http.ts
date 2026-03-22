@@ -256,6 +256,7 @@ export class HttpService {
     const formData = new FormData();
     formData.append('chatGuid', chatGuid);
     formData.append('tempGuid', tempGuid);
+    formData.append('name', file.name);
     if (opts.message) formData.append('message', opts.message);
     formData.append('attachment', file);
     return this.request('POST', '/message/attachment', {
