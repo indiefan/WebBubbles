@@ -8,8 +8,3 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-self.addEventListener('fetch', (event) => {
-  // Empty fetch handler is required by some browsers to trigger PWA install prompt.
-  // We don't cache explicitly here, just let the standard Next.js routing perform naturally.
-  return;
-});
