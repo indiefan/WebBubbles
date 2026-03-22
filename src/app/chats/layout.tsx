@@ -40,6 +40,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
         const cached = await db.chats.orderBy("lastMessageDate").reverse().toArray();
         if (cached.length > 0) {
           setChats(cached);
+        } else if (useSyncStore.getState().lastFullSync) {
+          // Fallback: If localStorage claims we're synced but IndexedDB is empty
+          // (browser cleared storage, or database renamed), we must nuke the flag and force a resync!
+          console.warn("[ChatsLayout] App claims to be synced but zero chats found! Resetting sync state.");
+          useSyncStore.getState().setLastFullSync(null);
+          router.push("/");
         }
       } catch (err) {
         console.error("[ChatsLayout] Failed to load cached chats:", err);
@@ -98,6 +104,37 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
               }}
               title={`Socket: ${socketState}`}
             />
+            {/* Logout button */}
+            <button
+              onClick={async () => {
+                socketService.disconnect();
+                useConnectionStore.getState().clear();
+                useSyncStore.getState().setLastFullSync(null);
+                useSyncStore.getState().reset();
+                useChatStore.getState().setChats([]);
+                try { await db.delete(); } catch {}
+                router.push("/");
+              }}
+              title="Logout"
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 4,
+                display: "flex",
+                alignItems: "center",
+                color: "var(--muted)",
+                transition: "color 0.2s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = "var(--danger)")}
+              onMouseLeave={(e) => (e.currentTarget.style.color = "var(--muted)")}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
           </div>
         </div>
 

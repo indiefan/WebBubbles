@@ -12,7 +12,7 @@ interface SyncState {
 
   setStatus: (status: SyncStatus) => void;
   setProgress: (progress: number, label?: string) => void;
-  setLastFullSync: (ts: number) => void;
+  setLastFullSync: (ts: number | null) => void;
   setLastIncrementalSync: (ts: number, rowId?: number) => void;
   reset: () => void;
 }
@@ -34,7 +34,13 @@ export const useSyncStore = create<SyncState>((set) => {
     setProgress: (progress, label) => set((s) => ({ progress, currentLabel: label ?? s.currentLabel })),
 
     setLastFullSync: (ts) => {
-      if (typeof window !== 'undefined') localStorage.setItem('bb-last-full-sync', String(ts));
+      if (typeof window !== 'undefined') {
+        if (ts === null) {
+          localStorage.removeItem('bb-last-full-sync');
+        } else {
+          localStorage.setItem('bb-last-full-sync', String(ts));
+        }
+      }
       set({ lastFullSync: ts });
     },
 
