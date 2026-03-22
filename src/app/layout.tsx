@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import ClientProviders from "@/components/ClientProviders";
+import PWARegister from "@/components/PWARegister";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "BlueBubbles Web",
-  description: "BlueBubbles iMessage web client",
+  title: "WebBubbles",
+  description: "WebBubbles - A modern iMessage web client for BlueBubbles",
 };
 
 export default function RootLayout({
@@ -26,7 +27,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
       <body>
-        <ClientProviders>{children}</ClientProviders>
+        <ClientProviders>
+          <PWARegister />
+          {children}
+        </ClientProviders>
       </body>
     </html>
   );

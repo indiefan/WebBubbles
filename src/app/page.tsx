@@ -80,7 +80,7 @@ export default function SetupPage() {
 
       <div className="glass-panel setup-card">
         <div className="setup-header">
-          <h1 className="gradient-text">BlueBubbles Web</h1>
+          <h1 className="gradient-text">WebBubbles</h1>
           <p>Connect to your macOS server to continue.</p>
         </div>
 

@@ -111,7 +111,7 @@ export class BlueBubblesDB extends Dexie {
   chatParticipants!: Table<ChatParticipantRecord>;
   drafts!: Table<DraftRecord, string>;
 
-  constructor(name = 'BlueBubblesWeb') {
+  constructor(name = 'WebBubbles') {
     super(name);
     this.version(1).stores({
       chats: 'guid, lastMessageDate, chatIdentifier',
