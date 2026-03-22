@@ -41,6 +41,9 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+# Create writable directory for bug reports
+RUN mkdir -p /app/bug-reports && chown nextjs:nodejs /app/bug-reports
+
 # Install curl for health checks
 RUN apk add --no-cache curl
 
