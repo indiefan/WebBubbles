@@ -2,7 +2,7 @@ services:
   web:
     image: ghcr.io/indiefan/webbubbles:latest
     ports:
-      - "3000:3000"
+      - "3042:3000"
     environment:
       - NODE_ENV=production
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
