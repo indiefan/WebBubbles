@@ -5,6 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useSyncStore } from "@/stores/syncStore";
+import { useContactStore } from "@/stores/contactStore";
 import { http } from "@/services/http";
 import { socketService } from "@/services/socket";
 import { registerActionHandlers } from "@/services/actionHandler";
@@ -16,6 +17,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const pathname = usePathname();
   const { serverAddress, password, socketState, isSetup } = useConnectionStore();
   const { chats, setChats } = useChatStore();
+  const { resolveChatDisplayName, resolveDisplayName, loaded: contactsLoaded } = useContactStore();
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -40,6 +42,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
         const cached = await db.chats.orderBy("lastMessageDate").reverse().toArray();
         if (cached.length > 0) {
           setChats(cached);
+          // Load contacts into memory for display name resolution
+          await useContactStore.getState().loadContacts();
         } else if (useSyncStore.getState().lastFullSync) {
           // Fallback: If localStorage claims we're synced but IndexedDB is empty
           // (browser cleared storage, or database renamed), we must nuke the flag and force a resync!
@@ -59,11 +63,13 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
   const filteredChats = searchQuery
     ? chats.filter(
-        (c) =>
-          (c.displayName || c.chatIdentifier || "")
-            .toLowerCase()
-            .includes(searchQuery.toLowerCase()) ||
-          (c.lastMessageText || "").toLowerCase().includes(searchQuery.toLowerCase()),
+        (c) => {
+          const resolved = resolveChatDisplayName(c).toLowerCase();
+          const query = searchQuery.toLowerCase();
+          return resolved.includes(query) ||
+            (c.chatIdentifier || "").toLowerCase().includes(query) ||
+            (c.lastMessageText || "").toLowerCase().includes(query);
+        },
       )
     : chats;
 
@@ -76,10 +82,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
     }
   }, []);
 
-  const getInitials = (name: string | null, identifier: string) => {
-    if (name) return name.charAt(0).toUpperCase();
-    const clean = identifier.replace(/[^a-zA-Z0-9]/g, "");
-    return clean.charAt(0).toUpperCase() || "#";
+  const getInitials = (resolvedName: string) => {
+    if (resolvedName) {
+      const firstChar = resolvedName.charAt(0);
+      if (/[a-zA-Z]/.test(firstChar)) return firstChar.toUpperCase();
+    }
+    return "#";
   };
 
   return (
@@ -171,12 +179,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                 }}
               >
                 <div className="avatar">
-                  {getInitials(chat.displayName, chat.chatIdentifier)}
+                  {getInitials(resolveChatDisplayName(chat))}
                 </div>
                 <div className="chat-info">
                   <div className="chat-title-row">
                     <span className="chat-name">
-                      {chat.displayName || chat.chatIdentifier}
+                      {resolveChatDisplayName(chat)}
                     </span>
                     <span className="chat-time">{formatTime(chat.lastMessageDate)}</span>
                   </div>

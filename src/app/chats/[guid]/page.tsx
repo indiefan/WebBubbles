@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback, use } from "react";
 import { useMessageStore } from "@/stores/messageStore";
 import { useChatStore } from "@/stores/chatStore";
+import { useContactStore } from "@/stores/contactStore";
 import { db, MessageRecord } from "@/lib/db";
 import { http } from "@/services/http";
 import { serverMessageToRecord } from "@/services/actionHandler";
@@ -185,6 +186,17 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
       elements.push(
         <div key={msg.guid}>
           <div className={`message-bubble ${msg.isFromMe ? "sent" : "received"}`} style={{ opacity: isTemp ? 0.6 : 1 }}>
+            {!msg.isFromMe && isGroupChat && msg.handleAddress && (
+              <div style={{
+                fontSize: 11,
+                fontWeight: 600,
+                color: "var(--accent)",
+                marginBottom: 2,
+                opacity: 0.9,
+              }}>
+                {resolveDisplayName(msg.handleAddress)}
+              </div>
+            )}
             {msg.text || (msg.hasAttachments ? "[Attachment]" : "")}
           </div>
           <div style={{
@@ -211,9 +223,11 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     );
   }
 
-  // Get chat title
+  // Get chat info
   const chat = useChatStore.getState().chats.find((c) => c.guid === guid);
-  const chatTitle = chat?.displayName || chat?.chatIdentifier || guid;
+  const { resolveChatDisplayName, resolveDisplayName } = useContactStore.getState();
+  const chatTitle = chat ? resolveChatDisplayName(chat) : guid;
+  const isGroupChat = chat && (chat.participantHandleAddresses?.length ?? 0) > 1;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>

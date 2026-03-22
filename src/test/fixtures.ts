@@ -119,3 +119,31 @@ export function mockSendTextResponse(tempGuid: string) {
     chats: [{ guid: 'iMessage;-;+11234567890' }],
   });
 }
+
+export function mockContactData(overrides: Record<string, any> = {}) {
+  return {
+    id: 'contact-001',
+    displayName: 'Alice Smith',
+    firstName: 'Alice',
+    lastName: 'Smith',
+    phoneNumbers: [{ address: '+11234567890' }],
+    emails: [{ address: 'alice@example.com' }],
+    ...overrides,
+  };
+}
+
+export function mockContactsResponse(contacts?: any[]) {
+  return mockServerResponse(
+    contacts ?? [
+      mockContactData(),
+      mockContactData({
+        id: 'contact-002',
+        displayName: 'Bob Jones',
+        firstName: 'Bob',
+        lastName: 'Jones',
+        phoneNumbers: [{ address: '+10987654321' }],
+        emails: [{ address: 'bob@example.com' }],
+      }),
+    ],
+  );
+}

@@ -1,6 +1,6 @@
-// Sync service — full sync (initial) and incremental sync (ongoing).
+// Sync service — full sync (initial), incremental sync (ongoing), and contact sync.
 
-import { db } from '@/lib/db';
+import { db, ContactRecord } from '@/lib/db';
 import { http } from './http';
 import { useSyncStore } from '@/stores/syncStore';
 import { useChatStore } from '@/stores/chatStore';
@@ -112,6 +112,10 @@ export async function runFullSync() {
       syncStore.setProgress(pct, `Syncing messages (${syncedChatMessages}/${chatsToSync.length} chats)...`);
     }
 
+    // 4. Sync contacts
+    syncStore.setProgress(98, 'Syncing contacts...');
+    await syncContacts();
+
     // Record sync state
     const now = Date.now();
     syncStore.setLastFullSync(now);
@@ -175,5 +179,106 @@ export async function runIncrementalSync() {
     console.log(`[Sync] Incremental sync complete: ${messages.length} messages`);
   } catch (err) {
     console.error('[Sync] Incremental sync failed:', err);
+  }
+}
+
+// ─── Contact Sync ──────────────────────────────────────
+
+/**
+ * Normalize a phone number to digits-only (strip +, spaces, dashes, parens)
+ * so that "+1 (234) 567-8901" and "12345678901" match.
+ */
+function normalizePhone(phone: string): string {
+  return phone.replace(/[^\d]/g, '');
+}
+
+/**
+ * Sync contacts from the BlueBubbles server into IndexedDB.
+ * Also links HandleRecords to contacts by matching phone/email addresses.
+ *
+ * Called during full sync and can be triggered manually for a refresh.
+ */
+export async function syncContacts() {
+  try {
+    console.log('[Sync] Starting contact sync...');
+    const res = await http.getContacts();
+    const serverContacts: any[] = res?.data ?? [];
+
+    if (serverContacts.length === 0) {
+      console.log('[Sync] No contacts returned from server');
+      return;
+    }
+
+    // Convert server contacts to ContactRecords
+    const contactRecords: ContactRecord[] = serverContacts.map((c: any) => {
+      const phones: string[] = [];
+      const emails: string[] = [];
+
+      // Server may return phoneNumbers/emails as arrays of objects or strings
+      if (c.phoneNumbers) {
+        for (const p of c.phoneNumbers) {
+          const addr = typeof p === 'string' ? p : p?.address ?? p?.value ?? '';
+          if (addr) phones.push(addr);
+        }
+      }
+      if (c.emails) {
+        for (const e of c.emails) {
+          const addr = typeof e === 'string' ? e : e?.address ?? e?.value ?? '';
+          if (addr) emails.push(addr);
+        }
+      }
+
+      // Build display name from structured name or use server-provided displayName
+      let displayName = c.displayName ?? '';
+      if (!displayName && c.firstName) {
+        displayName = [c.firstName, c.lastName].filter(Boolean).join(' ');
+      }
+
+      return {
+        id: c.id ?? c.sourceId ?? `contact-${phones[0] ?? emails[0] ?? Math.random()}`,
+        displayName: displayName || 'Unknown',
+        phones,
+        emails,
+        structuredName: c.structuredName ?? c.name ?? null,
+        avatarHash: c.avatar ? String(c.avatar).slice(0, 16) : null,
+      };
+    });
+
+    // Bulk-upsert contacts
+    await db.contacts.bulkPut(contactRecords);
+    console.log(`[Sync] Stored ${contactRecords.length} contacts`);
+
+    // Build a lookup: normalized address → contact ID
+    const addressToContactId = new Map<string, string>();
+    for (const contact of contactRecords) {
+      for (const phone of contact.phones) {
+        addressToContactId.set(normalizePhone(phone), contact.id);
+        // Also store the original (for email-style matches)
+        addressToContactId.set(phone.toLowerCase(), contact.id);
+      }
+      for (const email of contact.emails) {
+        addressToContactId.set(email.toLowerCase(), contact.id);
+      }
+    }
+
+    // Link handles to contacts
+    const allHandles = await db.handles.toArray();
+    let linked = 0;
+    for (const handle of allHandles) {
+      const normalizedAddr = normalizePhone(handle.address);
+      const contactId =
+        addressToContactId.get(handle.address.toLowerCase()) ??
+        addressToContactId.get(normalizedAddr) ??
+        null;
+
+      if (contactId && contactId !== handle.contactId) {
+        await db.handles.update(handle.address, { contactId });
+        linked++;
+      }
+    }
+
+    console.log(`[Sync] Linked ${linked} handles to contacts`);
+  } catch (err) {
+    console.error('[Sync] Contact sync failed:', err);
   }
 }
