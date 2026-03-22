@@ -21,25 +21,30 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   upsertChat: (chat) =>
     set((s) => {
+      let newChats: ChatRecord[];
       const idx = s.chats.findIndex((c) => c.guid === chat.guid);
       if (idx >= 0) {
-        const updated = [...s.chats];
-        updated[idx] = { ...updated[idx], ...chat };
-        return { chats: updated };
+        newChats = [...s.chats];
+        newChats[idx] = { ...newChats[idx], ...chat };
+      } else {
+        newChats = [chat, ...s.chats];
       }
-      return { chats: [chat, ...s.chats] };
+      newChats.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0));
+      return { chats: newChats };
     }),
 
   setActiveChatGuid: (guid) => set({ activeChatGuid: guid }),
 
   updateChatLastMessage: (chatGuid, text, date, messageGuid) =>
-    set((s) => ({
-      chats: s.chats.map((c) =>
+    set((s) => {
+      const newChats = s.chats.map((c) =>
         c.guid === chatGuid
           ? { ...c, lastMessageText: text, lastMessageDate: date, lastMessageGuid: messageGuid }
-          : c,
-      ),
-    })),
+          : c
+      );
+      newChats.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0));
+      return { chats: newChats };
+    }),
 
   markChatRead: (chatGuid) =>
     set((s) => ({

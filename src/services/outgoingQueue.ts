@@ -65,6 +65,12 @@ class OutgoingQueue {
       item.tempGuid,
     );
 
+    await db.chats.update(item.chatGuid, {
+      lastMessageText: item.text,
+      lastMessageDate: optimistic.dateCreated,
+      lastMessageGuid: item.tempGuid,
+    });
+
     this.queue.push(item);
     this.processNext();
   }

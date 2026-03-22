@@ -105,6 +105,12 @@ async function handleNewMessage(rawData: any) {
       msg.guid,
     );
 
+    await db.chats.update(msg.chatGuid, {
+      lastMessageText: msg.text,
+      lastMessageDate: msg.dateCreated,
+      lastMessageGuid: msg.guid,
+    });
+
     // Mark unread if not from me and not the active chat
     const activeChat = useChatStore.getState().activeChatGuid;
     if (!msg.isFromMe && msg.chatGuid !== activeChat) {
