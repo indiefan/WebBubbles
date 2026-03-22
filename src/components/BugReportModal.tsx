@@ -11,7 +11,7 @@ export default function BugReportModal() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [description, setDescription] = useState("");
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
-  const [result, setResult] = useState<{ issueUrl?: string; error?: string; reportPath?: string } | null>(null);
+  const [result, setResult] = useState<{ issueUrl?: string; error?: string; reportPath?: string; githubError?: string } | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
 
   // Close on Escape
@@ -86,7 +86,7 @@ export default function BugReportModal() {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setResult({ issueUrl: data.issueUrl, reportPath: data.reportPath });
+        setResult({ issueUrl: data.issueUrl, reportPath: data.reportPath, githubError: data.githubError });
         setPhase("done");
       } else {
         setResult({ error: data.error || "Unknown error" });
@@ -203,6 +203,11 @@ export default function BugReportModal() {
               >
                 View Issue on GitHub →
               </a>
+            )}
+            {result?.githubError && !result?.issueUrl && (
+              <p style={{ fontSize: 12, color: "var(--danger)" }}>
+                ⚠ GitHub issue not created: {result.githubError}
+              </p>
             )}
             <button className="button-primary" onClick={close} style={{ marginTop: 8 }}>Close</button>
           </div>

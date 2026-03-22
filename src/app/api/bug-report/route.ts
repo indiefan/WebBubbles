@@ -57,29 +57,68 @@ export async function POST(req: NextRequest) {
     const token = process.env.GITHUB_TOKEN;
     const repo = process.env.GITHUB_REPO;
     let issueUrl = '';
+    let githubError = '';
 
     if (token && repo) {
       try {
-        // Build issue body
+        // Step 1: Upload screenshot to repo if present
+        let screenshotGitUrl = '';
+        if (screenshotDataUrl) {
+          try {
+            const base64Data = screenshotDataUrl.replace(/^data:image\/\w+;base64,/, '');
+            const filename = `bug-screenshots/${reportId}.png`;
+            const uploadRes = await fetch(
+              `https://api.github.com/repos/${repo}/contents/${filename}`,
+              {
+                method: 'PUT',
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json',
+                  Accept: 'application/vnd.github+json',
+                },
+                body: JSON.stringify({
+                  message: `Bug report screenshot: ${reportId}`,
+                  content: base64Data,
+                }),
+              },
+            );
+            if (uploadRes.ok) {
+              const uploadData = await uploadRes.json();
+              screenshotGitUrl = uploadData.content?.download_url || '';
+              console.log(`[BugReport] Screenshot uploaded: ${screenshotGitUrl}`);
+            } else {
+              console.warn(`[BugReport] Screenshot upload failed: ${await uploadRes.text()}`);
+            }
+          } catch (err) {
+            console.warn('[BugReport] Screenshot upload error:', err);
+          }
+        }
+
+        // Step 2: Build issue body (no base64, stay under 65536 chars)
         const issueParts: string[] = [];
         issueParts.push(`## Bug Report`);
         issueParts.push(`\n**Submitted:** ${new Date().toISOString()}`);
         issueParts.push(`\n### Description\n${description}`);
 
-        if (screenshotDataUrl) {
-          // Try to embed — GitHub renders base64 inline images
-          issueParts.push(`\n### Screenshot\n![Screenshot](${screenshotDataUrl})`);
+        if (screenshotGitUrl) {
+          issueParts.push(`\n### Screenshot\n![Screenshot](${screenshotGitUrl})`);
         }
 
+        // Trim logs to fit within GitHub's 65536 char body limit
+        const MAX_LOG_CHARS = 20000;
         if (clientLogs) {
-          const trimmed = clientLogs.length > 50000 ? clientLogs.slice(-50000) : clientLogs;
+          const trimmed = clientLogs.length > MAX_LOG_CHARS ? clientLogs.slice(-MAX_LOG_CHARS) : clientLogs;
           issueParts.push(`\n### Client Logs (last 5 min)\n<details>\n<summary>Click to expand</summary>\n\n\`\`\`\n${trimmed}\n\`\`\`\n</details>`);
         }
 
         if (serverLogs) {
-          const trimmed = serverLogs.length > 50000 ? serverLogs.slice(-50000) : serverLogs;
+          const trimmed = serverLogs.length > MAX_LOG_CHARS ? serverLogs.slice(-MAX_LOG_CHARS) : serverLogs;
           issueParts.push(`\n### Server Logs\n<details>\n<summary>Click to expand</summary>\n\n\`\`\`\n${trimmed}\n\`\`\`\n</details>`);
         }
+
+        // Step 3: Create the issue
+        const issueBody = issueParts.join('\n');
+        console.log(`[BugReport] Issue body length: ${issueBody.length} chars`);
 
         const issueRes = await fetch(`https://api.github.com/repos/${repo}/issues`, {
           method: 'POST',
@@ -90,7 +129,7 @@ export async function POST(req: NextRequest) {
           },
           body: JSON.stringify({
             title: `[Bug] ${description.slice(0, 100)}`,
-            body: issueParts.join('\n'),
+            body: issueBody,
             labels: ['bug'],
           }),
         });
@@ -101,10 +140,13 @@ export async function POST(req: NextRequest) {
           console.log(`[BugReport] GitHub issue created: ${issueUrl}`);
         } else {
           const errText = await issueRes.text();
-          console.warn(`[BugReport] GitHub issue creation failed (non-fatal): ${errText}`);
+          console.error(`[BugReport] GitHub issue creation failed: ${errText}`);
+          // Don't fail the whole request — local save succeeded
+          githubError = `GitHub: ${JSON.parse(errText)?.message || errText}`;
         }
-      } catch (err) {
-        console.warn('[BugReport] GitHub issue creation failed (non-fatal):', err);
+      } catch (err: any) {
+        console.error('[BugReport] GitHub error:', err);
+        githubError = err.message;
       }
     }
 
@@ -112,6 +154,7 @@ export async function POST(req: NextRequest) {
       success: true,
       reportPath,
       issueUrl: issueUrl || undefined,
+      githubError: githubError || undefined,
     });
   } catch (err: any) {
     console.error('[BugReport] Error:', err);
