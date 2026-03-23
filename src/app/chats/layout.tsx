@@ -102,7 +102,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
       {/* Sidebar */}
       <div className="sidebar">
         <div className="sidebar-header">
-          <h2>Messages</h2>
+          <h2 style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            Messages
+            <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>
+              v0.0.1.{(process.env.NEXT_PUBLIC_COMMIT_HASH || "dev").slice(-4)}
+            </span>
+          </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* Connection indicator */}
             <div
