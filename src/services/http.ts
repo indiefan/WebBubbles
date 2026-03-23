@@ -275,12 +275,14 @@ export class HttpService {
   editMessage(guid: string, editedMessage: string, backwardsCompatMessage: string, partIndex = 0) {
     return this.request('POST', `/message/${encodeURIComponent(guid)}/edit`, {
       body: { editedMessage, backwardsCompatibilityMessage: backwardsCompatMessage, partIndex },
+      timeoutMs: 60_000,
     });
   }
 
   unsendMessage(guid: string, partIndex = 0) {
     return this.request('POST', `/message/${encodeURIComponent(guid)}/unsend`, {
       body: { partIndex },
+      timeoutMs: 60_000,
     });
   }
 
