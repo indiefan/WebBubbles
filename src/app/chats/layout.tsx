@@ -105,7 +105,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
           <h2 style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
             Messages
             <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>
-              v0.0.1.{(process.env.NEXT_PUBLIC_COMMIT_HASH || "dev").slice(-4)}
+              v{process.env.NEXT_PUBLIC_APP_VERSION || "dev"}
             </span>
           </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

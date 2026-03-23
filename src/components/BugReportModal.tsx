@@ -1,18 +1,156 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import html2canvas from "html2canvas";
 import { logBuffer } from "@/services/logBuffer";
 import { http } from "@/services/http";
 
 type Phase = "idle" | "capturing" | "form" | "submitting" | "done" | "error";
 
+/**
+ * Capture a DOM diagnostic snapshot: the main content area's HTML structure
+ * and computed styles for elements matching key selectors. This gives developers
+ * the context needed to debug visual/layout bugs without needing to reproduce them.
+ */
+function captureDomSnapshot(): string {
+  const lines: string[] = [];
+
+  // 1. Viewport info
+  lines.push(`## DOM Snapshot`);
+  lines.push(`- Viewport: ${window.innerWidth}×${window.innerHeight} (dpr: ${window.devicePixelRatio})`);
+  lines.push(`- User Agent: ${navigator.userAgent}`);
+  lines.push(`- URL: ${window.location.href}`);
+  lines.push(``);
+
+  // 2. Computed styles for debug-relevant selectors
+  const selectors = [
+    '.reaction-picker',
+    '.reaction-picker-btn',
+    '.reaction-badge',
+    '.message-bubble.sent',
+    '.message-bubble.received',
+    '.compose-area',
+  ];
+
+  lines.push(`### Computed Styles`);
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el) {
+      const cs = getComputedStyle(el);
+      lines.push(`#### \`${sel}\``);
+      lines.push(`- background: ${cs.background}`);
+      lines.push(`- backgroundColor: ${cs.backgroundColor}`);
+      lines.push(`- color: ${cs.color}`);
+      lines.push(`- border: ${cs.border}`);
+      lines.push(`- padding: ${cs.padding}`);
+      lines.push(`- margin: ${cs.margin}`);
+      lines.push(`- position: ${cs.position}`);
+      lines.push(`- display: ${cs.display}`);
+      lines.push(`- zIndex: ${cs.zIndex}`);
+      lines.push(`- opacity: ${cs.opacity}`);
+      lines.push(`- appearance: ${cs.appearance}`);
+      lines.push(`- backdropFilter: ${cs.backdropFilter}`);
+      lines.push(``);
+    }
+  }
+
+  // 3. Condensed DOM tree for the active conversation area
+  const mainView = document.querySelector('.main-view') || document.querySelector('.app-layout');
+  if (mainView) {
+    lines.push(`### DOM Tree (main view, depth=3)`);
+    lines.push('```html');
+    lines.push(condensedDom(mainView, 3));
+    lines.push('```');
+  }
+
+  // 4. All loaded stylesheets (just names, not content)
+  lines.push(``);
+  lines.push(`### Stylesheets`);
+  for (const sheet of document.styleSheets) {
+    try {
+      lines.push(`- ${sheet.href || '(inline)'} (${sheet.cssRules?.length ?? '?'} rules)`);
+    } catch {
+      lines.push(`- ${sheet.href || '(inline)'} (cross-origin, cannot read)`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function condensedDom(el: Element, maxDepth: number, depth = 0): string {
+  if (depth >= maxDepth) {
+    const childCount = el.children.length;
+    return childCount > 0 ? `${'  '.repeat(depth)}... (${childCount} children)` : '';
+  }
+
+  const tag = el.tagName.toLowerCase();
+  const cls = el.className && typeof el.className === 'string' ? `.${el.className.split(/\s+/).join('.')}` : '';
+  const id = el.id ? `#${el.id}` : '';
+  const indent = '  '.repeat(depth);
+
+  let result = `${indent}<${tag}${id}${cls}>`;
+
+  if (el.children.length === 0) {
+    const text = el.textContent?.trim();
+    if (text && text.length > 40) {
+      result += ` "${text.slice(0, 40)}..."`;
+    } else if (text) {
+      result += ` "${text}"`;
+    }
+    return result;
+  }
+
+  const childLines: string[] = [];
+  // Limit to first 15 children to keep size manageable
+  const kids = Array.from(el.children).slice(0, 15);
+  for (const child of kids) {
+    const childStr = condensedDom(child, maxDepth, depth + 1);
+    if (childStr) childLines.push(childStr);
+  }
+  if (el.children.length > 15) {
+    childLines.push(`${'  '.repeat(depth + 1)}... (+${el.children.length - 15} more)`);
+  }
+
+  return result + '\n' + childLines.join('\n');
+}
+
 export default function BugReportModal() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [description, setDescription] = useState("");
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
+  const [domSnapshot, setDomSnapshot] = useState("");
   const [result, setResult] = useState<{ issueUrl?: string; error?: string; reportPath?: string; githubError?: string } | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+
+  const close = useCallback(() => {
+    setPhase("idle");
+    setDescription("");
+    setScreenshotUrl(null);
+    setDomSnapshot("");
+    setResult(null);
+  }, []);
+
+  const startReport = useCallback(async () => {
+    // Capture DOM snapshot BEFORE opening the modal (so it captures current UI state)
+    const snapshot = captureDomSnapshot();
+    setDomSnapshot(snapshot);
+
+    setPhase("capturing");
+    try {
+      const canvas = await html2canvas(document.body, {
+        backgroundColor: "#0f1014",
+        scale: 1,
+        logging: false,
+        useCORS: true,
+      });
+      const dataUrl = canvas.toDataURL("image/png");
+      setScreenshotUrl(dataUrl);
+      setPhase("form");
+    } catch (err) {
+      console.error("[BugReport] Screenshot failed:", err);
+      setPhase("form");
+    }
+  }, []);
 
   // Close on Escape
   useEffect(() => {
@@ -25,44 +163,31 @@ export default function BugReportModal() {
       window.addEventListener("keydown", handleKey);
       return () => window.removeEventListener("keydown", handleKey);
     }
-  }, [phase]);
+  }, [phase, close]);
 
-  const close = () => {
-    setPhase("idle");
-    setDescription("");
-    setScreenshotUrl(null);
-    setResult(null);
-  };
-
-  const startReport = async () => {
-    setPhase("capturing");
-    try {
-      // Capture screenshot of the entire page
-      const canvas = await html2canvas(document.body, {
-        backgroundColor: "#0f1014",
-        scale: 1,
-        logging: false,
-        useCORS: true,
-      });
-      const dataUrl = canvas.toDataURL("image/png");
-      setScreenshotUrl(dataUrl);
-      setPhase("form");
-    } catch (err) {
-      console.error("[BugReport] Screenshot failed:", err);
-      // Continue without screenshot
-      setPhase("form");
-    }
-  };
+  // Global keyboard shortcut: Cmd+Shift+B (Mac) / Ctrl+Shift+B (other)
+  useEffect(() => {
+    const handleShortcut = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "b") {
+        e.preventDefault();
+        if (phase === "idle") {
+          startReport();
+        } else {
+          close();
+        }
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [phase, startReport, close]);
 
   const submitReport = async () => {
     if (!description.trim()) return;
     setPhase("submitting");
 
     try {
-      // Gather client logs
       const clientLogs = logBuffer.formatRecent(5 * 60 * 1000);
 
-      // Try to get server logs from BlueBubbles server
       let serverLogs = "";
       try {
         const res = await http.serverStatTotals();
@@ -71,14 +196,16 @@ export default function BugReportModal() {
         serverLogs = "(Could not fetch server info)";
       }
 
-      // Send to our API route
+      // Append DOM snapshot to client logs
+      const fullLogs = clientLogs + (domSnapshot ? `\n\n${domSnapshot}` : "");
+
       const res = await fetch("/api/bug-report", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           description: description.trim(),
           screenshotDataUrl: screenshotUrl,
-          clientLogs,
+          clientLogs: fullLogs,
           serverLogs,
         }),
       });
@@ -103,7 +230,7 @@ export default function BugReportModal() {
       <button
         className="bug-report-trigger"
         onClick={startReport}
-        title="Report a bug"
+        title="Report a bug (⌘⇧B)"
         aria-label="Report a bug"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -136,7 +263,7 @@ export default function BugReportModal() {
         {phase === "capturing" && (
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, padding: 24 }}>
             <span className="loading-spinner" style={{ width: 32, height: 32 }}></span>
-            <p style={{ color: "var(--muted)" }}>Taking screenshot...</p>
+            <p style={{ color: "var(--muted)" }}>Taking screenshot &amp; capturing DOM...</p>
           </div>
         )}
 
@@ -165,7 +292,7 @@ export default function BugReportModal() {
               />
             </div>
             <p style={{ fontSize: 12, color: "var(--muted)" }}>
-              Client logs (last 5 min) will be automatically attached.
+              Client logs, DOM snapshot, and computed styles will be automatically attached.
             </p>
             <button
               className="button-primary"
