@@ -2,6 +2,86 @@
 
 Web native client implementation for the [BlueBubbles Server](https://bluebubbles.app). Access your iMessage conversations from any browser by connecting to the same macOS server that the mobile apps use.
 
+## Installation
+
+### Prerequisites
+
+- A running [BlueBubbles Server](https://bluebubbles.app) on your Mac — this is the iMessage bridge that WebBubbles connects to
+- Your server's **URL** and **password** (found in the BlueBubbles Server app under Settings)
+
+### Option A: Docker Compose (Recommended)
+
+The simplest way to run WebBubbles in production. Includes health checks, automatic restarts, and zero-downtime rolling updates.
+
+1. Clone the repo and create your environment file:
+
+   ```bash
+   git clone https://github.com/indiefan/WebBubbles.git
+   cd WebBubbles
+   cp .env.example .env.local
+   ```
+
+2. (Optional) Edit `.env.local` to enable in-app bug reporting:
+
+   ```bash
+   GITHUB_TOKEN=ghp_...        # GitHub PAT with `repo` scope
+   GITHUB_REPO=owner/repo      # Target repo for bug report issues
+   ```
+
+3. Start the service:
+
+   ```bash
+   docker compose up -d
+   ```
+
+4. Open [http://localhost:3042](http://localhost:3042) and enter your BlueBubbles server URL and password.
+
+> To use Docker Swarm for orchestration, deploy with `docker stack deploy -c docker-compose.yml webbubbles` instead.
+
+### Option B: Docker (Standalone)
+
+```bash
+docker run -d \
+  -p 3042:3000 \
+  --name webbubbles \
+  --restart unless-stopped \
+  ghcr.io/indiefan/webbubbles:latest
+```
+
+Open [http://localhost:3042](http://localhost:3042).
+
+### Option C: Local Development
+
+Requires [Node.js](https://nodejs.org) 20+.
+
+```bash
+git clone https://github.com/indiefan/WebBubbles.git
+cd WebBubbles
+npm install
+cp .env.example .env.local   # Optional: configure GitHub bug reports
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) and enter your BlueBubbles server URL and password.
+
+#### Available Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start dev server (Turbopack) |
+| `npm run build` | Production build |
+| `npm run start` | Start production server |
+| `npm run test` | Run unit + integration tests |
+| `npm run test:watch` | Watch mode |
+| `npm run lint` | ESLint |
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GITHUB_TOKEN` | No | GitHub PAT with `repo` scope — enables in-app bug report filing |
+| `GITHUB_REPO` | No | Target GitHub repo for bug reports (format: `owner/repo`) |
+
 ## System Diagram
 
 ```
@@ -78,39 +158,7 @@ See component-level docs in `design/`:
 - [State Management](design/state-management.md) — Zustand stores and reactivity model
 - [Messaging](design/messaging.md) — Send/receive lifecycle, reactions, attachments
 
-## Getting Started
-
-### Prerequisites
-
-- [Node.js](https://nodejs.org) 20+
-- A running [BlueBubbles Server](https://bluebubbles.app) on your Mac
-
-### Setup
-
-```bash
-npm install
-cp .env.example .env.local  # Optional: configure GitHub bug reports
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000) and enter your BlueBubbles server URL and password.
-
-### Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `GITHUB_TOKEN` | No | GitHub PAT for bug report issue creation |
-| `GITHUB_REPO` | No | GitHub repo for bug reports (`owner/repo`) |
-
-### Scripts
-
-```bash
-npm run dev       # Start dev server
-npm run build     # Production build
-npm run test      # Run unit + integration tests
-npm run test:watch # Watch mode
-```
-
 ## License
 
 MIT
+
