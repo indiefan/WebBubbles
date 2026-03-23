@@ -4,8 +4,10 @@ import React, { useEffect, useState, useCallback } from "react";
 import { format } from "date-fns";
 import { db, MessageRecord } from "@/lib/db";
 import { useContactStore } from "@/stores/contactStore";
+import { useMessageStore } from "@/stores/messageStore";
 import { MessageAttachmentGroup } from "./MessageAttachment";
 import { ReactionPicker } from "./ReactionPicker";
+import { ReplyPreview } from "./ReplyPreview";
 
 // iMessage associatedMessageType values → emoji
 // The server may send EITHER numeric codes OR string names.
@@ -168,6 +170,11 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     setShowPicker(prev => !prev);
   }, []);
 
+  const handleReply = useCallback(() => {
+    useMessageStore.getState().setReplyToMessage(msg);
+    setShowPicker(false);
+  }, [msg]);
+
   return (
     <div key={msg.guid} style={{ position: "relative" }}>
       <div
@@ -176,6 +183,11 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
       >
+        {/* Reply preview — shows what message this is replying to */}
+        {msg.threadOriginatorGuid && (
+          <ReplyPreview threadOriginatorGuid={msg.threadOriginatorGuid} variant="bubble" />
+        )}
+
         {!msg.isFromMe && isGroupChat && msg.handleAddress && (
           <div style={{
             fontSize: 11,
@@ -203,15 +215,27 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
           </div>
         )}
 
-        {/* Reaction picker */}
+        {/* Reaction picker + reply action */}
         {showPicker && (
-          <ReactionPicker
-            chatGuid={chatGuid}
-            messageGuid={msg.guid}
-            messageText={msg.text}
-            isFromMe={msg.isFromMe}
-            onClose={() => setShowPicker(false)}
-          />
+          <div style={{ position: "absolute", top: -48, display: "flex", gap: 4, zIndex: 100, [msg.isFromMe ? "right" : "left"]: 0 }}>
+            <ReactionPicker
+              chatGuid={chatGuid}
+              messageGuid={msg.guid}
+              messageText={msg.text}
+              isFromMe={msg.isFromMe}
+              onClose={() => setShowPicker(false)}
+            />
+            <button
+              className="reply-action-btn"
+              onClick={handleReply}
+              title="Reply"
+              aria-label="Reply to message"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+              </svg>
+            </button>
+          </div>
         )}
       </div>
       <div style={{

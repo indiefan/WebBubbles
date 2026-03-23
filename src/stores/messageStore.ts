@@ -5,6 +5,7 @@ interface MessageState {
   messages: MessageRecord[];
   loading: boolean;
   hasMore: boolean;
+  replyToMessage: MessageRecord | null;
 
   setMessages: (msgs: MessageRecord[]) => void;
   prependMessages: (msgs: MessageRecord[]) => void;
@@ -13,6 +14,8 @@ interface MessageState {
   replaceTempGuid: (tempGuid: string, realGuid: string, updates: Partial<MessageRecord>) => void;
   setLoading: (loading: boolean) => void;
   setHasMore: (hasMore: boolean) => void;
+  setReplyToMessage: (msg: MessageRecord | null) => void;
+  clearReplyToMessage: () => void;
   clear: () => void;
 }
 
@@ -20,6 +23,7 @@ export const useMessageStore = create<MessageState>((set) => ({
   messages: [],
   loading: false,
   hasMore: true,
+  replyToMessage: null,
 
   setMessages: (messages) => set({ messages }),
 
@@ -47,5 +51,7 @@ export const useMessageStore = create<MessageState>((set) => ({
 
   setLoading: (loading) => set({ loading }),
   setHasMore: (hasMore) => set({ hasMore }),
-  clear: () => set({ messages: [], loading: false, hasMore: true }),
+  setReplyToMessage: (msg) => set({ replyToMessage: msg }),
+  clearReplyToMessage: () => set({ replyToMessage: null }),
+  clear: () => set({ messages: [], loading: false, hasMore: true, replyToMessage: null }),
 }));

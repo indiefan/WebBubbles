@@ -2,8 +2,10 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import { db } from "@/lib/db";
+import { useMessageStore } from "@/stores/messageStore";
 import { outgoingQueue } from "@/services/outgoingQueue";
 import { AttachmentPreview } from "./AttachmentPreview";
+import { ReplyPreview } from "./ReplyPreview";
 
 interface ComposeAreaProps {
   chatGuid: string;
@@ -15,6 +17,8 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
   const [draft, setDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const replyToMessage = useMessageStore((s) => s.replyToMessage);
 
   // Load draft from IndexedDB
   useEffect(() => {
@@ -37,17 +41,28 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
     }
   }, [text, draft, chatGuid]);
 
+  // Focus input when reply is set
+  useEffect(() => {
+    if (replyToMessage) {
+      inputRef.current?.focus();
+    }
+  }, [replyToMessage]);
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() && files.length === 0) return;
 
     const messageText = text.trim();
     const messageFiles = [...files];
+    const replyGuid = replyToMessage?.guid ?? undefined;
     setText("");
     setFiles([]);
 
     // Clear draft
     db.drafts.delete(chatGuid).catch(() => {});
+
+    // Clear reply state
+    useMessageStore.getState().clearReplyToMessage();
 
     // Notify parent to set scroll flags
     onSend();
@@ -57,6 +72,7 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
       tempGuid: outgoingQueue.generateTempGuid(),
       text: messageText,
       attachments: messageFiles,
+      selectedMessageGuid: replyGuid,
     });
   };
 
@@ -79,6 +95,15 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }} onDragOver={handleDragOver} onDrop={handleDrop}>
+      {/* Reply banner */}
+      {replyToMessage && (
+        <ReplyPreview
+          threadOriginatorGuid={replyToMessage.guid}
+          variant="banner"
+          message={replyToMessage}
+          onDismiss={() => useMessageStore.getState().clearReplyToMessage()}
+        />
+      )}
       <AttachmentPreview files={files} onRemove={(i) => setFiles(f => f.filter((_, idx) => idx !== i))} />
       <form className="compose-area" onSubmit={handleSend} style={{ display: 'flex', alignItems: 'center' }}>
         <button type="button" onClick={() => fileInputRef.current?.click()} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '0 8px', color: 'var(--muted)' }}>
@@ -86,9 +111,10 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
         </button>
         <input type="file" ref={fileInputRef} multiple onChange={handleFileChange} style={{ display: 'none' }} />
         <input
+          ref={inputRef}
           type="text"
           className="compose-input"
-          placeholder="iMessage"
+          placeholder={replyToMessage ? "Reply…" : "iMessage"}
           value={text}
           onChange={(e) => setText(e.target.value)}
           style={{ flex: 1 }}
@@ -103,3 +129,4 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
     </div>
   );
 }
+

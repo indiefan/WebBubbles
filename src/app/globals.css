@@ -564,3 +564,153 @@ body {
 .reaction-picker-btn:active {
   transform: scale(0.95);
 }
+
+/* ─── Reply Preview (on message bubble) ────────────── */
+.reply-preview {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  overflow: hidden;
+}
+
+.reply-preview:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.reply-preview-line {
+  width: 3px;
+  min-height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.reply-preview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.reply-preview-sender {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.3;
+}
+
+.reply-preview-text {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+/* ─── Reply Banner (compose area) ──────────────────── */
+.reply-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: rgba(59, 130, 246, 0.08);
+  border-top: 1px solid var(--card-border);
+  animation: reply-banner-in 0.15s ease-out;
+}
+
+@keyframes reply-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reply-banner-line {
+  width: 3px;
+  height: 28px;
+  border-radius: 2px;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.reply-banner-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.reply-banner-sender {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.3;
+}
+
+.reply-banner-text {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.reply-banner-dismiss {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.reply-banner-dismiss:hover {
+  color: var(--foreground);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ─── Reply Action Button ──────────────────────────── */
+.reply-action-btn {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(30, 30, 35);
+  border: 1px solid var(--card-border);
+  border-radius: 50%;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.reply-action-btn:hover {
+  color: var(--foreground);
+  background: rgba(255, 255, 255, 0.1);
+  transform: scale(1.1);
+}
+
+.reply-action-btn:active {
+  transform: scale(0.95);
+}
+

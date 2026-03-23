@@ -4,6 +4,7 @@ import { useDownloadStore } from '../stores/downloadStore';
 import { http } from '../services/http';
 import { outgoingQueue } from '../services/outgoingQueue';
 import { REACTION_TYPE_MAP } from '../components/chat/ReactionPicker';
+import { useMessageStore } from '../stores/messageStore';
 
 // Mock http methods
 vi.mock('../services/http', () => ({
@@ -120,5 +121,92 @@ describe('Reactions', () => {
     expect(REACTION_TYPE_MAP['laugh']).toBe('😂');
     expect(REACTION_TYPE_MAP['emphasize']).toBe('‼️');
     expect(REACTION_TYPE_MAP['question']).toBe('❓');
+  });
+});
+
+describe('Replies', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useMessageStore.getState().clear();
+  });
+
+  it('sets and clears replyToMessage in the message store', () => {
+    const mockMsg = {
+      guid: 'msg-123',
+      chatGuid: 'chat-1',
+      handleAddress: '+1234567890',
+      text: 'Hello world',
+      dateCreated: Date.now(),
+      isFromMe: false,
+      error: 0,
+    } as any;
+
+    // Initially null
+    expect(useMessageStore.getState().replyToMessage).toBeNull();
+
+    // Set reply
+    useMessageStore.getState().setReplyToMessage(mockMsg);
+    expect(useMessageStore.getState().replyToMessage).toEqual(mockMsg);
+
+    // Clear reply
+    useMessageStore.getState().clearReplyToMessage();
+    expect(useMessageStore.getState().replyToMessage).toBeNull();
+  });
+
+  it('clears replyToMessage when store is cleared', () => {
+    const mockMsg = {
+      guid: 'msg-456',
+      chatGuid: 'chat-1',
+      text: 'Test',
+      dateCreated: Date.now(),
+      isFromMe: true,
+      error: 0,
+    } as any;
+
+    useMessageStore.getState().setReplyToMessage(mockMsg);
+    expect(useMessageStore.getState().replyToMessage).not.toBeNull();
+
+    useMessageStore.getState().clear();
+    expect(useMessageStore.getState().replyToMessage).toBeNull();
+  });
+
+  it('passes selectedMessageGuid to sendText when replying', async () => {
+    vi.mocked(http.sendText).mockResolvedValue({ data: { guid: 'real-reply-guid' } });
+
+    await outgoingQueue.enqueue({
+      chatGuid: 'chat-1',
+      tempGuid: 'temp-reply-1',
+      text: 'This is a reply',
+      selectedMessageGuid: 'original-msg-guid',
+    });
+
+    // Wait for async processing
+    await new Promise(resolve => setTimeout(resolve, 50));
+
+    expect(http.sendText).toHaveBeenCalledWith(
+      'chat-1',
+      'temp-reply-1',
+      'This is a reply',
+      expect.objectContaining({
+        selectedMessageGuid: 'original-msg-guid',
+      }),
+    );
+  });
+
+  it('sets threadOriginatorGuid on optimistic message when replying', async () => {
+    vi.mocked(http.sendText).mockResolvedValue({ data: { guid: 'real-reply-guid' } });
+
+    await outgoingQueue.enqueue({
+      chatGuid: 'chat-1',
+      tempGuid: 'temp-reply-2',
+      text: 'Reply text',
+      selectedMessageGuid: 'parent-msg-guid',
+    });
+
+    // The optimistic message should have threadOriginatorGuid set
+    const msgs = useMessageStore.getState().messages;
+    const optimistic = msgs.find((m) => m.guid === 'temp-reply-2');
+    expect(optimistic).toBeDefined();
+    expect(optimistic!.threadOriginatorGuid).toBe('parent-msg-guid');
   });
 });
