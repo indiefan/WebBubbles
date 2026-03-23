@@ -5,6 +5,7 @@
 import { db, MessageRecord, ChatRecord } from '@/lib/db';
 import { useChatStore } from '@/stores/chatStore';
 import { useMessageStore } from '@/stores/messageStore';
+import { useTypingStore } from '@/stores/typingStore';
 import { socketService } from './socket';
 
 // Duplicate detection: keep track of recently processed GUIDs
@@ -167,8 +168,18 @@ async function handleUpdatedMessage(rawData: any) {
 }
 
 function handleTypingIndicator(data: any) {
-  // For Phase 1 we just log; Phase 2 will add the typing store
-  console.log('[ActionHandler] Typing indicator:', data);
+  const payload = data?.data ?? data;
+  const chatGuid = payload?.guid ?? payload?.chatGuid;
+  const senderAddress = payload?.handle ?? payload?.handleAddress ?? payload?.senderAddress;
+  const isDisplay = payload?.display ?? true;
+
+  if (!chatGuid) return;
+
+  if (isDisplay && senderAddress) {
+    useTypingStore.getState().setTyping(chatGuid, senderAddress);
+  } else {
+    useTypingStore.getState().clearTyping(chatGuid);
+  }
 }
 
 function handleChatReadStatus(data: any) {

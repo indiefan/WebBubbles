@@ -12,6 +12,8 @@ import { ComposeArea } from "@/components/chat/ComposeArea";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationDetails } from "@/components/chat/ConversationDetails";
 
+import { TypingIndicator } from "@/components/chat/TypingIndicator";
+
 export default function MessageView({ params }: { params: Promise<{ guid: string }> }) {
   const { guid: rawGuid } = use(params);
   const guid = decodeURIComponent(rawGuid);
@@ -181,6 +183,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
 
         <div className="message-list" ref={messageListRef} onScroll={handleScroll}>
           {renderMessages()}
+          <TypingIndicator chatGuid={guid} isGroupChat={!!isGroupChat} />
           <div ref={messagesEndRef} />
         </div>
 

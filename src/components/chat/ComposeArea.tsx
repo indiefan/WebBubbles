@@ -1,11 +1,14 @@
 "use client";
 
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import { db } from "@/lib/db";
 import { useMessageStore } from "@/stores/messageStore";
 import { outgoingQueue } from "@/services/outgoingQueue";
+import { socketService } from "@/services/socket";
 import { AttachmentPreview } from "./AttachmentPreview";
 import { ReplyPreview } from "./ReplyPreview";
+
+const TYPING_THROTTLE_MS = 3000;
 
 interface ComposeAreaProps {
   chatGuid: string;
@@ -18,6 +21,7 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
   const [files, setFiles] = useState<File[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const lastTypingEmitRef = useRef<number>(0);
   const replyToMessage = useMessageStore((s) => s.replyToMessage);
 
   // Load draft from IndexedDB
@@ -28,6 +32,11 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
         setDraft(d.text);
       }
     });
+  }, [chatGuid]);
+
+  // Reset typing throttle when switching chats
+  useEffect(() => {
+    lastTypingEmitRef.current = 0;
   }, [chatGuid]);
 
   // Auto-save draft
@@ -47,6 +56,20 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
       inputRef.current?.focus();
     }
   }, [replyToMessage]);
+
+  const sendTypingIndicator = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTypingEmitRef.current < TYPING_THROTTLE_MS) return;
+    lastTypingEmitRef.current = now;
+    socketService.sendEvent("typing-indicator", { chatGuid, display: true });
+  }, [chatGuid]);
+
+  const handleTextChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setText(e.target.value);
+    if (e.target.value.length > 0) {
+      sendTypingIndicator();
+    }
+  }, [sendTypingIndicator]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -116,7 +139,7 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
           className="compose-input"
           placeholder={replyToMessage ? "Reply…" : "iMessage"}
           value={text}
-          onChange={(e) => setText(e.target.value)}
+          onChange={handleTextChange}
           style={{ flex: 1 }}
         />
         <button type="submit" className="send-button" disabled={!text.trim() && files.length === 0}>
@@ -129,4 +152,3 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
     </div>
   );
 }
-

@@ -95,6 +95,13 @@ export class SocketService {
     useConnectionStore.getState().setSocketState(state);
   }
 
+  /** Emit an event to the server (e.g. typing indicators). */
+  sendEvent(event: string, data: any) {
+    if (this.socket?.connected) {
+      this.socket.emit(event, data);
+    }
+  }
+
   get isConnected() {
     return this.socket?.connected ?? false;
   }

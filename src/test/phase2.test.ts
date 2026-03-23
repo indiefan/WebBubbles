@@ -7,6 +7,7 @@ import { REACTION_TYPE_MAP } from '../components/chat/ReactionPicker';
 import { useMessageStore } from '../stores/messageStore';
 
 import { getDeliveryStatus } from '../components/chat/MessageBubble';
+import { useTypingStore } from '../stores/typingStore';
 
 // Mock http methods
 vi.mock('../services/http', () => ({
@@ -354,5 +355,56 @@ describe('Read Receipts & Delivery Status', () => {
     const result = getDeliveryStatus(msg);
     expect(result.text).toMatch(/^\d{1,2}:\d{2}\s[AP]M$/);
     expect(result.className).toBe('message-status');
+  });
+});
+
+describe('Typing Indicators', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // Reset store state
+    useTypingStore.setState({ typingByChatGuid: {} });
+  });
+
+  it('setTyping updates store with sender address', () => {
+    useTypingStore.getState().setTyping('chat-1', '+1234567890');
+    const entry = useTypingStore.getState().typingByChatGuid['chat-1'];
+    expect(entry).toBeDefined();
+    expect(entry.senderAddress).toBe('+1234567890');
+  });
+
+  it('clearTyping removes typing state', () => {
+    useTypingStore.getState().setTyping('chat-1', '+1234567890');
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeDefined();
+
+    useTypingStore.getState().clearTyping('chat-1');
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
+  });
+
+  it('auto-clears typing state after 5 seconds', () => {
+    vi.useFakeTimers();
+    useTypingStore.getState().setTyping('chat-1', '+1234567890');
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeDefined();
+
+    vi.advanceTimersByTime(5000);
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it('subsequent setTyping calls reset the auto-clear timer', () => {
+    vi.useFakeTimers();
+    useTypingStore.getState().setTyping('chat-1', '+1234567890');
+
+    // Advance 3s, then set again
+    vi.advanceTimersByTime(3000);
+    useTypingStore.getState().setTyping('chat-1', '+1234567890');
+
+    // 3s more — only 3s since last setTyping, should still be present
+    vi.advanceTimersByTime(3000);
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeDefined();
+
+    // 2s more — 5s since last setTyping, should auto-clear
+    vi.advanceTimersByTime(2000);
+    expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
+    vi.useRealTimers();
   });
 });
