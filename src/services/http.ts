@@ -252,11 +252,12 @@ export class HttpService {
     });
   }
 
-  sendAttachment(chatGuid: string, tempGuid: string, file: File, opts: { message?: string } = {}) {
+  sendAttachment(chatGuid: string, tempGuid: string, file: File, opts: { message?: string; method?: string } = {}) {
     const formData = new FormData();
     formData.append('chatGuid', chatGuid);
     formData.append('tempGuid', tempGuid);
     formData.append('name', file.name);
+    formData.append('method', opts.method ?? 'private-api');
     if (opts.message) formData.append('message', opts.message);
     formData.append('attachment', file);
     return this.request('POST', '/message/attachment', {
