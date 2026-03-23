@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { ChatRecord } from '@/lib/db';
+import { ChatRecord, db } from '@/lib/db';
 
 interface ChatState {
   chats: ChatRecord[];
@@ -11,6 +11,7 @@ interface ChatState {
   updateChatLastMessage: (chatGuid: string, text: string | null, date: number, messageGuid: string) => void;
   markChatRead: (chatGuid: string) => void;
   markChatUnread: (chatGuid: string) => void;
+  togglePin: (chatGuid: string) => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -55,4 +56,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       chats: s.chats.map((c) => (c.guid === chatGuid ? { ...c, hasUnreadMessage: true } : c)),
     })),
+
+  togglePin: (chatGuid) =>
+    set((s) => {
+      const chat = s.chats.find((c) => c.guid === chatGuid);
+      if (!chat) return s;
+
+      const wasPinned = chat.isPinned;
+      let newPinIndex = 0;
+
+      if (!wasPinned) {
+        // Assign pinIndex = max existing + 1
+        const maxIndex = s.chats
+          .filter((c) => c.isPinned)
+          .reduce((max, c) => Math.max(max, c.pinIndex ?? 0), -1);
+        newPinIndex = maxIndex + 1;
+      }
+
+      const updates = {
+        isPinned: !wasPinned,
+        pinIndex: wasPinned ? 0 : newPinIndex,
+      };
+
+      // Persist to IndexedDB (fire-and-forget)
+      try {
+        db.chats.update(chatGuid, updates)?.catch?.((err: any) => {
+          console.error('[ChatStore] Failed to persist pin state:', err);
+        });
+      } catch {
+        // IndexedDB may not be available in test environment
+      }
+
+      return {
+        chats: s.chats.map((c) =>
+          c.guid === chatGuid ? { ...c, ...updates } : c
+        ),
+      };
+    }),
 }));

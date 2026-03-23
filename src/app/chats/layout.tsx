@@ -25,6 +25,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const [searchQuery, setSearchQuery] = useState("");
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
 
   useEffect(() => {
     if (!isSetup) {
@@ -227,46 +228,93 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
               {searchQuery ? "No matching chats" : "No chats found"}
             </div>
           ) : (
-            filteredChats.map((chat) => (
-              <div
-                key={chat.guid}
-                className={`chat-list-item ${
-                  pathname === `/chats/${encodeURIComponent(chat.guid)}` ? "active" : ""
-                }`}
-                onClick={() => {
-                  useChatStore.getState().setActiveChatGuid(chat.guid);
-                  router.push(`/chats/${encodeURIComponent(chat.guid)}`);
-                }}
-              >
-                <div className="avatar">
-                  {getInitials(resolveChatDisplayName(chat))}
-                </div>
-                <div className="chat-info">
-                  <div className="chat-title-row">
-                    <span className="chat-name">
-                      {resolveChatDisplayName(chat)}
-                    </span>
-                    <span className="chat-time">{formatTime(chat.lastMessageDate)}</span>
+            <>
+              {/* Pinned chats horizontal row */}
+              {(() => {
+                const pinned = filteredChats
+                  .filter((c) => c.isPinned)
+                  .sort((a, b) => (a.pinIndex ?? 0) - (b.pinIndex ?? 0));
+                if (pinned.length === 0) return null;
+                return (
+                  <div className="pinned-chats-section">
+                    {pinned.map((chat) => {
+                      const name = resolveChatDisplayName(chat);
+                      return (
+                        <div
+                          key={chat.guid}
+                          className={`pinned-chat-item ${
+                            pathname === `/chats/${encodeURIComponent(chat.guid)}` ? "active" : ""
+                          }`}
+                          onClick={() => {
+                            useChatStore.getState().setActiveChatGuid(chat.guid);
+                            router.push(`/chats/${encodeURIComponent(chat.guid)}`);
+                          }}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            setContextMenu({ x: e.clientX, y: e.clientY, chatGuid: chat.guid });
+                          }}
+                          title={name}
+                        >
+                          <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
+                            {getInitials(name)}
+                          </div>
+                          {chat.hasUnreadMessage && <span className="pinned-unread-dot" />}
+                          <span className="pinned-chat-name">{name.split(" ")[0]}</span>
+                        </div>
+                      );
+                    })}
                   </div>
-                  <div className="chat-preview" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    {chat.hasUnreadMessage && (
-                      <span
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: "50%",
-                          background: "var(--accent)",
-                          flexShrink: 0,
-                        }}
-                      />
-                    )}
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                      {chat.lastMessageText || "Attachment"}
-                    </span>
+                );
+              })()}
+
+              {/* Unpinned chats list */}
+              {filteredChats
+                .filter((c) => !c.isPinned)
+                .map((chat) => (
+                <div
+                  key={chat.guid}
+                  className={`chat-list-item ${
+                    pathname === `/chats/${encodeURIComponent(chat.guid)}` ? "active" : ""
+                  }`}
+                  onClick={() => {
+                    useChatStore.getState().setActiveChatGuid(chat.guid);
+                    router.push(`/chats/${encodeURIComponent(chat.guid)}`);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({ x: e.clientX, y: e.clientY, chatGuid: chat.guid });
+                  }}
+                >
+                  <div className="avatar">
+                    {getInitials(resolveChatDisplayName(chat))}
+                  </div>
+                  <div className="chat-info">
+                    <div className="chat-title-row">
+                      <span className="chat-name">
+                        {resolveChatDisplayName(chat)}
+                      </span>
+                      <span className="chat-time">{formatTime(chat.lastMessageDate)}</span>
+                    </div>
+                    <div className="chat-preview" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      {chat.hasUnreadMessage && (
+                        <span
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            background: "var(--accent)",
+                            flexShrink: 0,
+                          }}
+                        />
+                      )}
+                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {chat.lastMessageText || "Attachment"}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              ))}
+            </>
           )}
         </div>
       </div>
@@ -276,6 +324,31 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
       {showNewChat && <NewChatModal onClose={() => setShowNewChat(false)} />}
       {showSearch && <SearchPanel onClose={() => setShowSearch(false)} />}
+
+      {/* Context menu overlay */}
+      {contextMenu && (
+        <div
+          className="chat-context-overlay"
+          onClick={() => setContextMenu(null)}
+          onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}
+        >
+          <div
+            className="chat-context-menu"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="chat-context-menu-item"
+              onClick={() => {
+                useChatStore.getState().togglePin(contextMenu.chatGuid);
+                setContextMenu(null);
+              }}
+            >
+              {chats.find((c) => c.guid === contextMenu.chatGuid)?.isPinned ? "📌 Unpin Chat" : "📌 Pin Chat"}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

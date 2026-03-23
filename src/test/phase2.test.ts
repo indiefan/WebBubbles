@@ -8,6 +8,7 @@ import { useMessageStore } from '../stores/messageStore';
 
 import { getDeliveryStatus } from '../components/chat/MessageBubble';
 import { useTypingStore } from '../stores/typingStore';
+import { useChatStore } from '../stores/chatStore';
 
 // Mock http methods
 vi.mock('../services/http', () => ({
@@ -406,5 +407,70 @@ describe('Typing Indicators', () => {
     vi.advanceTimersByTime(2000);
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
     vi.useRealTimers();
+  });
+});
+
+describe('Pinned Chats', () => {
+  const makeChat = (guid: string, isPinned = false, pinIndex = 0) => ({
+    guid,
+    chatIdentifier: guid,
+    displayName: null,
+    isArchived: false,
+    isPinned,
+    pinIndex,
+    hasUnreadMessage: false,
+    muteType: null,
+    muteArgs: null,
+    autoSendReadReceipts: null,
+    autoSendTypingIndicators: null,
+    title: null,
+    lastMessageGuid: null,
+    lastMessageDate: Date.now(),
+    lastMessageText: null,
+    lastReadMessageGuid: null,
+    dateDeleted: null,
+    style: null,
+    customAvatarPath: null,
+    participantHandleAddresses: [],
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useChatStore.setState({ chats: [], activeChatGuid: null });
+  });
+
+  it('togglePin pins an unpinned chat', () => {
+    const chat = makeChat('chat-1');
+    useChatStore.getState().setChats([chat]);
+
+    useChatStore.getState().togglePin('chat-1');
+
+    const updated = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-1');
+    expect(updated.isPinned).toBe(true);
+    expect(updated.pinIndex).toBe(0);
+  });
+
+  it('togglePin unpins a pinned chat', () => {
+    const chat = makeChat('chat-1', true, 0);
+    useChatStore.getState().setChats([chat]);
+
+    useChatStore.getState().togglePin('chat-1');
+
+    const updated = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-1');
+    expect(updated.isPinned).toBe(false);
+    expect(updated.pinIndex).toBe(0);
+  });
+
+  it('assigns incrementing pinIndex when pinning multiple chats', () => {
+    const chat1 = makeChat('chat-1', true, 0);
+    const chat2 = makeChat('chat-2');
+    const chat3 = makeChat('chat-3');
+    useChatStore.getState().setChats([chat1, chat2, chat3]);
+
+    useChatStore.getState().togglePin('chat-2');
+
+    const pinned2 = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-2');
+    expect(pinned2.isPinned).toBe(true);
+    expect(pinned2.pinIndex).toBe(1); // max existing (0) + 1
   });
 });

@@ -776,7 +776,7 @@ The mobile app handles thousands of messages per chat. The web app must match th
 - [x] Message editing and unsending
 - [x] Read receipts and delivery status display
 - [x] Typing indicators (send and receive)
-- [ ] Pinned chats display and management
+- [x] Pinned chats display and management
 - [ ] Chat muting and notification settings
 - [ ] Browser notifications with sound
 - [ ] URL preview cards (from payloadData)
