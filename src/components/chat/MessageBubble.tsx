@@ -8,20 +8,38 @@ import { MessageAttachmentGroup } from "./MessageAttachment";
 import { ReactionPicker } from "./ReactionPicker";
 
 // iMessage associatedMessageType values → emoji
-// Positive values = add reaction, negative = remove
-const REACTION_EMOJI: Record<number, string> = {
-  2000: "❤️",  // love
-  2001: "👍",  // like
-  2002: "👎",  // dislike
-  2003: "😂",  // laugh
-  2004: "‼️",  // emphasize
-  2005: "❓",  // question
-  3000: "❤️",  // love (remove — filtered during grouping)
-  3001: "👍",
-  3002: "👎",
-  3003: "😂",
-  3004: "‼️",
-  3005: "❓",
+// The server may send EITHER numeric codes OR string names.
+// Numeric: Positive values = add reaction, negative = remove
+// String:  "love", "like", "dislike", "laugh", "emphasize", "question"
+//          with "-" prefix for removal (e.g. "-love")
+const REACTION_EMOJI_BY_NUM: Record<number, { emoji: string; base: number }> = {
+  2000: { emoji: "❤️", base: 2000 },   // love
+  2001: { emoji: "👍", base: 2001 },   // like
+  2002: { emoji: "👎", base: 2002 },   // dislike
+  2003: { emoji: "😂", base: 2003 },   // laugh
+  2004: { emoji: "‼️", base: 2004 },   // emphasize
+  2005: { emoji: "❓", base: 2005 },   // question
+  3000: { emoji: "❤️", base: 2000 },   // love remove
+  3001: { emoji: "👍", base: 2001 },
+  3002: { emoji: "👎", base: 2002 },
+  3003: { emoji: "😂", base: 2003 },
+  3004: { emoji: "‼️", base: 2004 },
+  3005: { emoji: "❓", base: 2005 },
+};
+
+const REACTION_EMOJI_BY_NAME: Record<string, { emoji: string; base: string }> = {
+  "love":       { emoji: "❤️", base: "love" },
+  "like":       { emoji: "👍", base: "like" },
+  "dislike":    { emoji: "👎", base: "dislike" },
+  "laugh":      { emoji: "😂", base: "laugh" },
+  "emphasize":  { emoji: "‼️", base: "emphasize" },
+  "question":   { emoji: "❓", base: "question" },
+  "-love":      { emoji: "❤️", base: "love" },
+  "-like":      { emoji: "👍", base: "like" },
+  "-dislike":   { emoji: "👎", base: "dislike" },
+  "-laugh":     { emoji: "😂", base: "laugh" },
+  "-emphasize": { emoji: "‼️", base: "emphasize" },
+  "-question":  { emoji: "❓", base: "question" },
 };
 
 interface ReactionGroup {
@@ -30,31 +48,44 @@ interface ReactionGroup {
   isFromMe: boolean;
 }
 
+function parseReactionType(raw: string | number | null | undefined): { emoji: string; base: string; isRemoval: boolean } | null {
+  if (raw == null) return null;
+
+  // Try numeric first
+  const num = typeof raw === "number" ? raw : parseInt(String(raw), 10);
+  if (!isNaN(num) && REACTION_EMOJI_BY_NUM[num]) {
+    const entry = REACTION_EMOJI_BY_NUM[num];
+    return { emoji: entry.emoji, base: String(entry.base), isRemoval: num >= 3000 };
+  }
+
+  // Try string name (e.g. "love", "-love")
+  const str = String(raw).toLowerCase();
+  const entry = REACTION_EMOJI_BY_NAME[str];
+  if (entry) {
+    return { emoji: entry.emoji, base: entry.base, isRemoval: str.startsWith("-") };
+  }
+
+  return null;
+}
+
 function groupReactions(reactionMessages: MessageRecord[]): ReactionGroup[] {
-  // Track net reactions: key = senderAddress|reactionType
-  const reactionState = new Map<string, { emoji: string; typeBase: number; isFromMe: boolean }>();
+  // Track net reactions: key = senderAddress|baseType
+  const reactionState = new Map<string, { emoji: string; isFromMe: boolean }>();
 
   // Sort by date so we process in chronological order
   const sorted = [...reactionMessages].sort((a, b) => a.dateCreated - b.dateCreated);
 
   for (const msg of sorted) {
-    const typeNum = typeof msg.associatedMessageType === "string"
-      ? parseInt(msg.associatedMessageType, 10)
-      : (msg.associatedMessageType as unknown as number);
-    if (isNaN(typeNum)) continue;
+    const parsed = parseReactionType(msg.associatedMessageType);
+    if (!parsed) continue;
 
     const sender = msg.handleAddress || (msg.isFromMe ? "__me__" : "__unknown__");
-    const isRemoval = typeNum >= 3000;
-    const baseType = isRemoval ? typeNum - 1000 : typeNum;
-    const key = `${sender}|${baseType}`;
+    const key = `${sender}|${parsed.base}`;
 
-    if (isRemoval) {
+    if (parsed.isRemoval) {
       reactionState.delete(key);
     } else {
-      const emoji = REACTION_EMOJI[typeNum];
-      if (emoji) {
-        reactionState.set(key, { emoji, typeBase: baseType, isFromMe: msg.isFromMe });
-      }
+      reactionState.set(key, { emoji: parsed.emoji, isFromMe: msg.isFromMe });
     }
   }
 
