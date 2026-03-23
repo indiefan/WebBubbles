@@ -122,56 +122,36 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
   const isTemp = msg.guid.startsWith("temp-");
   const hasError = msg.error > 0;
 
-  // Load reactions for this message
+  // Load reactions for this message — check both plain GUID and p:N/ prefix formats
   useEffect(() => {
     if (!msg.guid || isTemp) return;
+    let cancelled = false;
 
     const loadReactions = async () => {
       try {
+        // iMessage stores associatedMessageGuid as either "GUID" or "p:N/GUID"
+        // Query all possible formats in a single lookup
         const reactionMsgs = await db.messages
-          .where("associatedMessageGuid")
-          .equals(msg.guid)
-          .toArray();
-
-        if (reactionMsgs.length > 0) {
-          setReactions(groupReactions(reactionMsgs));
-        }
-      } catch (e) {
-        // Index may not exist yet for temp messages
-      }
-    };
-
-    loadReactions();
-  }, [msg.guid, isTemp]);
-
-  // Also check for "p:N/" prefix format — iMessage sometimes uses
-  // "p:0/GUID" as the associatedMessageGuid
-  useEffect(() => {
-    if (!msg.guid || isTemp) return;
-
-    const loadPrefixedReactions = async () => {
-      try {
-        // Query for messages whose associatedMessageGuid starts with "p:" and contains our guid
-        // This is a common pattern: "p:0/MESSAGE_GUID"
-        const allReactionMsgs = await db.messages
           .where("associatedMessageGuid")
           .anyOf([
             msg.guid,
             `p:0/${msg.guid}`,
             `p:1/${msg.guid}`,
             `p:2/${msg.guid}`,
+            `p:3/${msg.guid}`,
           ])
           .toArray();
 
-        if (allReactionMsgs.length > 0) {
-          setReactions(groupReactions(allReactionMsgs));
+        if (!cancelled) {
+          setReactions(reactionMsgs.length > 0 ? groupReactions(reactionMsgs) : []);
         }
-      } catch {
-        // Fallback — already handled above
+      } catch (e) {
+        console.error("[MessageBubble] Failed to load reactions for", msg.guid, e);
       }
     };
 
-    loadPrefixedReactions();
+    loadReactions();
+    return () => { cancelled = true; };
   }, [msg.guid, isTemp]);
 
   const formatTime = (ts: number) => {
