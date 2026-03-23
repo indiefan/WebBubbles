@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { format } from "date-fns";
 import { db, MessageRecord } from "@/lib/db";
 import { useContactStore } from "@/stores/contactStore";
@@ -120,6 +120,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
   const { resolveDisplayName } = useContactStore();
   const [reactions, setReactions] = useState<ReactionGroup[]>([]);
   const [showPicker, setShowPicker] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement>(null);
 
   const isTemp = msg.guid.startsWith("temp-");
   const hasError = msg.error > 0;
@@ -217,17 +218,17 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
 
         {/* Reaction picker + reply action */}
         {showPicker && (
-          <div style={{ position: "absolute", top: -48, display: "flex", gap: 4, zIndex: 100, [msg.isFromMe ? "right" : "left"]: 0 }}>
+          <div ref={toolbarRef} style={{ position: "absolute", top: -48, display: "flex", gap: 4, zIndex: 100, [msg.isFromMe ? "right" : "left"]: 0 }}>
             <ReactionPicker
               chatGuid={chatGuid}
               messageGuid={msg.guid}
               messageText={msg.text}
               isFromMe={msg.isFromMe}
               onClose={() => setShowPicker(false)}
+              containerRef={toolbarRef}
             />
             <button
               className="reply-action-btn"
-              onMouseDown={(e) => e.stopPropagation()}
               onClick={handleReply}
               title="Reply"
               aria-label="Reply to message"

@@ -24,15 +24,19 @@ interface ReactionPickerProps {
   /** bubble alignment — picker mirrors position */
   isFromMe: boolean;
   onClose: () => void;
+  /** Optional external container ref for outside-click boundary.
+   *  When provided, clicks inside this container won't trigger onClose. */
+  containerRef?: React.RefObject<HTMLElement | null>;
 }
 
-export function ReactionPicker({ chatGuid, messageGuid, messageText, isFromMe, onClose }: ReactionPickerProps) {
+export function ReactionPicker({ chatGuid, messageGuid, messageText, isFromMe, onClose, containerRef }: ReactionPickerProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const boundary = containerRef?.current ?? ref.current;
+      if (boundary && !boundary.contains(e.target as Node)) onClose();
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
