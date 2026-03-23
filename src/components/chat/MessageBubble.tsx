@@ -5,6 +5,8 @@ import { format } from "date-fns";
 import { db, MessageRecord } from "@/lib/db";
 import { useContactStore } from "@/stores/contactStore";
 import { useMessageStore } from "@/stores/messageStore";
+import { useConnectionStore } from "@/stores/connectionStore";
+import { http } from "@/services/http";
 import { MessageAttachmentGroup } from "./MessageAttachment";
 import { ReactionPicker } from "./ReactionPicker";
 import { ReplyPreview } from "./ReplyPreview";
@@ -120,10 +122,16 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
   const { resolveDisplayName } = useContactStore();
   const [reactions, setReactions] = useState<ReactionGroup[]>([]);
   const [showPicker, setShowPicker] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(msg.text || "");
+  const [editLoading, setEditLoading] = useState(false);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const editInputRef = useRef<HTMLTextAreaElement>(null);
 
   const isTemp = msg.guid.startsWith("temp-");
   const hasError = msg.error > 0;
+  const isUnsent = !!msg.dateDeleted;
+  const isEdited = !!msg.dateEdited && !isUnsent;
 
   // Load reactions for this message — check both plain GUID and p:N/ prefix formats
   useEffect(() => {
@@ -157,29 +165,94 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     return () => { cancelled = true; };
   }, [msg.guid, isTemp]);
 
+  // Focus edit input when entering edit mode
+  useEffect(() => {
+    if (isEditing && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.setSelectionRange(editInputRef.current.value.length, editInputRef.current.value.length);
+    }
+  }, [isEditing]);
+
   const formatTime = (ts: number) => {
     return format(new Date(ts), "h:mm a");
   };
 
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    setShowPicker(prev => !prev);
-  }, []);
+    if (!isEditing) setShowPicker(prev => !prev);
+  }, [isEditing]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    setShowPicker(prev => !prev);
-  }, []);
+    if (!isEditing) setShowPicker(prev => !prev);
+  }, [isEditing]);
 
   const handleReply = useCallback(() => {
     useMessageStore.getState().setReplyToMessage(msg);
     setShowPicker(false);
   }, [msg]);
 
+  const handleStartEdit = useCallback(() => {
+    setEditText(msg.text || "");
+    setIsEditing(true);
+    setShowPicker(false);
+  }, [msg.text]);
+
+  const handleCancelEdit = useCallback(() => {
+    setIsEditing(false);
+    setEditText(msg.text || "");
+  }, [msg.text]);
+
+  const handleSaveEdit = useCallback(async () => {
+    const trimmed = editText.trim();
+    if (!trimmed || trimmed === msg.text) {
+      setIsEditing(false);
+      return;
+    }
+    setEditLoading(true);
+    try {
+      await http.editMessage(msg.guid, trimmed, trimmed);
+      // Optimistically update local state
+      const updates = { text: trimmed, dateEdited: Date.now() };
+      await db.messages.update(msg.guid, updates);
+      useMessageStore.getState().updateMessage(msg.guid, updates);
+      setIsEditing(false);
+    } catch (err) {
+      console.error("[MessageBubble] Edit failed:", err);
+    } finally {
+      setEditLoading(false);
+    }
+  }, [editText, msg.guid, msg.text]);
+
+  const handleUnsend = useCallback(async () => {
+    setShowPicker(false);
+    try {
+      await http.unsendMessage(msg.guid);
+      // Optimistically update local state
+      const updates = { dateDeleted: Date.now(), text: null };
+      await db.messages.update(msg.guid, updates);
+      useMessageStore.getState().updateMessage(msg.guid, updates);
+    } catch (err) {
+      console.error("[MessageBubble] Unsend failed:", err);
+    }
+  }, [msg.guid]);
+
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSaveEdit();
+    } else if (e.key === "Escape") {
+      handleCancelEdit();
+    }
+  }, [handleSaveEdit, handleCancelEdit]);
+
+  // Can edit/unsend: own message, not temp, not already unsent
+  const canModify = msg.isFromMe && !isTemp && !isUnsent;
+
   return (
     <div key={msg.guid} style={{ position: "relative" }}>
       <div
-        className={`message-bubble ${msg.isFromMe ? "sent" : "received"}`}
+        className={`message-bubble ${msg.isFromMe ? "sent" : "received"} ${isUnsent ? "message-unsent" : ""}`}
         style={{ opacity: isTemp ? 0.6 : 1, position: "relative" }}
         onDoubleClick={handleDoubleClick}
         onContextMenu={handleContextMenu}
@@ -200,8 +273,45 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
             {resolveDisplayName(msg.handleAddress)}
           </div>
         )}
-        {msg.text && <div>{msg.text}</div>}
-        <MessageAttachmentGroup msg={msg} />
+
+        {/* Message content: unsent, editing, or normal */}
+        {isUnsent ? (
+          <div className="message-unsent-text">Message unsent</div>
+        ) : isEditing ? (
+          <div className="message-edit-container">
+            <textarea
+              ref={editInputRef}
+              className="message-edit-input"
+              value={editText}
+              onChange={(e) => setEditText(e.target.value)}
+              onKeyDown={handleEditKeyDown}
+              disabled={editLoading}
+              rows={1}
+            />
+            <div className="message-edit-actions">
+              <button
+                className="edit-save-btn"
+                onClick={handleSaveEdit}
+                disabled={editLoading || !editText.trim() || editText.trim() === msg.text}
+              >
+                {editLoading ? "…" : "Save"}
+              </button>
+              <button
+                className="edit-cancel-btn"
+                onClick={handleCancelEdit}
+                disabled={editLoading}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {msg.text && <div>{msg.text}</div>}
+            <MessageAttachmentGroup msg={msg} />
+            {isEdited && <div className="message-edited-label">Edited</div>}
+          </>
+        )}
 
         {/* Reaction badges */}
         {reactions.length > 0 && (
@@ -216,7 +326,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
           </div>
         )}
 
-        {/* Reaction picker + reply action */}
+        {/* Reaction picker + action toolbar */}
         {showPicker && (
           <div ref={toolbarRef} style={{ position: "absolute", top: -48, display: "flex", gap: 4, zIndex: 100, [msg.isFromMe ? "right" : "left"]: 0 }}>
             <ReactionPicker
@@ -237,6 +347,32 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
                 <polyline points="9 17 4 12 9 7" /><path d="M20 18v-2a4 4 0 0 0-4-4H4" />
               </svg>
             </button>
+            {canModify && (
+              <>
+                <button
+                  className="reply-action-btn"
+                  onClick={handleStartEdit}
+                  title="Edit"
+                  aria-label="Edit message"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                  </svg>
+                </button>
+                <button
+                  className="reply-action-btn unsend-action-btn"
+                  onClick={handleUnsend}
+                  title="Unsend"
+                  aria-label="Unsend message"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1 4 1 10 7 10" />
+                    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -252,3 +388,4 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     </div>
   );
 }
+

@@ -272,6 +272,18 @@ export class HttpService {
     });
   }
 
+  editMessage(guid: string, editedMessage: string, backwardsCompatMessage: string, partIndex = 0) {
+    return this.request('POST', `/message/${encodeURIComponent(guid)}/edit`, {
+      body: { editedMessage, backwardsCompatibilityMessage: backwardsCompatMessage, partIndex },
+    });
+  }
+
+  unsendMessage(guid: string, partIndex = 0) {
+    return this.request('POST', `/message/${encodeURIComponent(guid)}/unsend`, {
+      body: { partIndex },
+    });
+  }
+
   // ─── Handles ─────────────────────────────────────────
   queryHandles(opts: { withQuery?: string[]; address?: string; offset?: number; limit?: number } = {}) {
     return this.request('POST', '/handle/query', {

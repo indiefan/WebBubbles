@@ -773,7 +773,7 @@ The mobile app handles thousands of messages per chat. The web app must match th
 - [x] Blurhash placeholders during attachment loading
 - [x] Reactions: display on bubbles, reaction picker, send reactions
 - [x] Replies: display with thread connector, reply compose mode, thread popup
-- [ ] Message editing and unsending
+- [x] Message editing and unsending
 - [ ] Read receipts and delivery status display
 - [ ] Typing indicators (send and receive)
 - [ ] Pinned chats display and management

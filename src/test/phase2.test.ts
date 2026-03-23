@@ -13,6 +13,8 @@ vi.mock('../services/http', () => ({
     sendAttachment: vi.fn(),
     sendText: vi.fn(),
     sendReaction: vi.fn(),
+    editMessage: vi.fn(),
+    unsendMessage: vi.fn(),
   }
 }));
 
@@ -208,5 +210,70 @@ describe('Replies', () => {
     const optimistic = msgs.find((m) => m.guid === 'temp-reply-2');
     expect(optimistic).toBeDefined();
     expect(optimistic!.threadOriginatorGuid).toBe('parent-msg-guid');
+  });
+});
+
+describe('Message Editing & Unsending', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useMessageStore.getState().clear();
+    vi.mocked(http.editMessage).mockResolvedValue({ data: 'ok' });
+    vi.mocked(http.unsendMessage).mockResolvedValue({ data: 'ok' });
+  });
+
+  it('calls editMessage with the correct parameters', async () => {
+    await http.editMessage('msg-guid-1', 'New text', 'New text', 0);
+    expect(http.editMessage).toHaveBeenCalledWith('msg-guid-1', 'New text', 'New text', 0);
+  });
+
+  it('calls unsendMessage with the correct parameters', async () => {
+    await http.unsendMessage('msg-guid-2', 0);
+    expect(http.unsendMessage).toHaveBeenCalledWith('msg-guid-2', 0);
+  });
+
+  it('updates message text and dateEdited in the store', () => {
+    const msg = {
+      guid: 'msg-edit-1',
+      chatGuid: 'chat-1',
+      text: 'Original text',
+      dateCreated: Date.now(),
+      dateEdited: null,
+      dateDeleted: null,
+      isFromMe: true,
+      error: 0,
+    } as any;
+
+    useMessageStore.getState().addMessage(msg);
+    expect(useMessageStore.getState().messages[0].text).toBe('Original text');
+
+    const now = Date.now();
+    useMessageStore.getState().updateMessage('msg-edit-1', { text: 'Edited text', dateEdited: now });
+
+    const updated = useMessageStore.getState().messages[0];
+    expect(updated.text).toBe('Edited text');
+    expect(updated.dateEdited).toBe(now);
+  });
+
+  it('updates message text to null and sets dateDeleted for unsend', () => {
+    const msg = {
+      guid: 'msg-unsend-1',
+      chatGuid: 'chat-1',
+      text: 'Will be unsent',
+      dateCreated: Date.now(),
+      dateEdited: null,
+      dateDeleted: null,
+      isFromMe: true,
+      error: 0,
+    } as any;
+
+    useMessageStore.getState().addMessage(msg);
+    expect(useMessageStore.getState().messages[0].text).toBe('Will be unsent');
+
+    const now = Date.now();
+    useMessageStore.getState().updateMessage('msg-unsend-1', { text: null, dateDeleted: now });
+
+    const updated = useMessageStore.getState().messages[0];
+    expect(updated.text).toBeNull();
+    expect(updated.dateDeleted).toBe(now);
   });
 });

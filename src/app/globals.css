@@ -714,3 +714,96 @@ body {
   transform: scale(0.95);
 }
 
+/* ─── Message Editing & Unsending ──────────────────── */
+.message-unsent {
+  opacity: 0.5;
+}
+
+.message-unsent-text {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.message-edited-label {
+  font-size: 11px;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.45);
+  margin-top: 4px;
+}
+
+.message-bubble.received .message-edited-label {
+  color: var(--muted);
+}
+
+.message-edit-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.message-edit-input {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-family: inherit;
+  line-height: 1.4;
+  outline: none;
+  resize: none;
+  transition: border-color 0.2s ease;
+}
+
+.message-edit-input:focus {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.message-edit-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.edit-save-btn,
+.edit-cancel-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s ease;
+}
+
+.edit-save-btn {
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+}
+
+.edit-save-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.edit-save-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.edit-cancel-btn {
+  background: transparent;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.edit-cancel-btn:hover:not(:disabled) {
+  color: white;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.unsend-action-btn:hover {
+  color: var(--danger) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+}
