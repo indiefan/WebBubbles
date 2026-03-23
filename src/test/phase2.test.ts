@@ -3,6 +3,7 @@ import { downloadService } from '../services/downloads';
 import { useDownloadStore } from '../stores/downloadStore';
 import { http } from '../services/http';
 import { outgoingQueue } from '../services/outgoingQueue';
+import { REACTION_TYPE_MAP } from '../components/chat/ReactionPicker';
 
 // Mock http methods
 vi.mock('../services/http', () => ({
@@ -10,6 +11,7 @@ vi.mock('../services/http', () => ({
     downloadAttachment: vi.fn(),
     sendAttachment: vi.fn(),
     sendText: vi.fn(),
+    sendReaction: vi.fn(),
   }
 }));
 
@@ -89,5 +91,34 @@ describe('OutgoingQueue Attachments', () => {
       { message: 'Here is a file' }
     );
     expect(http.sendText).not.toHaveBeenCalled();
+  });
+});
+
+describe('Reactions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(http.sendReaction).mockResolvedValue({ data: 'ok' });
+  });
+
+  it('calls sendReaction with the correct parameters', async () => {
+    await http.sendReaction('chat-guid', 'Hello', 'msg-guid', 'love');
+    expect(http.sendReaction).toHaveBeenCalledWith('chat-guid', 'Hello', 'msg-guid', 'love');
+  });
+
+  it('supports all 6 tapback reaction types', async () => {
+    const reactionTypes = ['love', 'like', 'dislike', 'laugh', 'emphasize', 'question'];
+    for (const type of reactionTypes) {
+      await http.sendReaction('chat-guid', 'text', 'msg-guid', type);
+    }
+    expect(http.sendReaction).toHaveBeenCalledTimes(6);
+  });
+
+  it('maps REACTION_TYPE_MAP correctly', () => {
+    expect(REACTION_TYPE_MAP['love']).toBe('❤️');
+    expect(REACTION_TYPE_MAP['like']).toBe('👍');
+    expect(REACTION_TYPE_MAP['dislike']).toBe('👎');
+    expect(REACTION_TYPE_MAP['laugh']).toBe('😂');
+    expect(REACTION_TYPE_MAP['emphasize']).toBe('‼️');
+    expect(REACTION_TYPE_MAP['question']).toBe('❓');
   });
 });

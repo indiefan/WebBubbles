@@ -127,8 +127,11 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     let lastDate = "";
 
     // Messages are sorted ASC (oldest first), rendered top-to-bottom
-    for (let i = 0; i < messages.length; i++) {
-      const msg = messages[i];
+    // Filter out reaction messages — they appear as badges on the original message
+    const displayMessages = messages.filter(msg => !msg.associatedMessageGuid);
+
+    for (let i = 0; i < displayMessages.length; i++) {
+      const msg = displayMessages[i];
       const msgDate = formatDateSeparator(msg.dateCreated);
 
       if (msgDate !== lastDate) {
@@ -141,7 +144,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
       }
 
       elements.push(
-        <MessageBubble key={msg.guid} msg={msg} isGroupChat={!!isGroupChat} />
+        <MessageBubble key={msg.guid} msg={msg} isGroupChat={!!isGroupChat} chatGuid={guid} />
       );
     }
 

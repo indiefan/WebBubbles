@@ -767,11 +767,11 @@ The mobile app handles thousands of messages per chat. The web app must match th
 
 **Goal:** Full message feature parity.
 
-- [ ] Attachment sending (file picker, drag-and-drop, progress)
-- [ ] Attachment display (inline images, video player, audio player, generic files)
-- [ ] Attachment download service with Cache API storage and LRU eviction
-- [ ] Blurhash placeholders during attachment loading
-- [ ] Reactions: display on bubbles, reaction picker, send reactions
+- [x] Attachment sending (file picker, drag-and-drop, progress)
+- [x] Attachment display (inline images, video player, audio player, generic files)
+- [x] Attachment download service with Cache API storage and LRU eviction
+- [x] Blurhash placeholders during attachment loading
+- [x] Reactions: display on bubbles, reaction picker, send reactions
 - [ ] Replies: display with thread connector, reply compose mode, thread popup
 - [ ] Message editing and unsending
 - [ ] Read receipts and delivery status display
@@ -792,12 +792,12 @@ The mobile app handles thousands of messages per chat. The web app must match th
 
 **Goal:** Feature-complete.
 
-- [ ] Search: local + server, date range filter, per-chat filter
-- [ ] Group chat management: create, rename, add/remove participants, leave
+- [x] Search: local + server, date range filter, per-chat filter
+- [x] Group chat management: create, rename, add/remove participants, leave
 - [ ] Chat icon upload and display
-- [ ] Conversation details panel: participants, shared media grid, shared links
-- [ ] New chat creator with contact search
-- [ ] Contact sync and display name resolution
+- [x] Conversation details panel: participants, shared media grid, shared links
+- [x] New chat creator with contact search
+- [x] Contact sync and display name resolution
 - [ ] Scheduled messages (list, create, edit, delete)
 - [ ] Fullscreen media viewer (lightbox with zoom/pan)
 - [ ] Audio recording and voice message sending
@@ -823,7 +823,7 @@ The mobile app handles thousands of messages per chat. The web app must match th
 - [ ] Server management panel: server info, restart, logs, version check
 - [ ] Backup/restore: theme and settings backup to server
 - [ ] Performance audit: Lighthouse, bundle analysis, lazy loading of routes
-- [ ] PWA support: manifest, service worker, offline shell, install prompt
+- [x] PWA support: manifest, service worker, offline shell, install prompt
 - [ ] Error handling: global error boundary, network error recovery, user-friendly messages
 - [ ] Redacted mode (blur content for privacy)
 - [ ] Find My integration (map view with device/friend locations)
