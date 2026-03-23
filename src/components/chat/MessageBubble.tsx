@@ -227,6 +227,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
             />
             <button
               className="reply-action-btn"
+              onMouseDown={(e) => e.stopPropagation()}
               onClick={handleReply}
               title="Reply"
               aria-label="Reply to message"
