@@ -118,6 +118,32 @@ interface MessageBubbleProps {
   chatGuid: string;
 }
 
+/** Derive the delivery status for a message's status line. Exported for testing. */
+export function getDeliveryStatus(msg: MessageRecord): { text: string; className: string } {
+  const isTemp = msg.guid.startsWith("temp-");
+  const hasError = msg.error > 0;
+
+  // Incoming messages: just show the time
+  if (!msg.isFromMe) {
+    return { text: format(new Date(msg.dateCreated), "h:mm a"), className: "message-status" };
+  }
+
+  if (hasError) {
+    return { text: "Failed to send", className: "message-status message-status-error" };
+  }
+  if (isTemp) {
+    return { text: "Sending…", className: "message-status" };
+  }
+  if (msg.dateRead) {
+    const readTime = format(new Date(msg.dateRead), "h:mm a");
+    return { text: `Read ${readTime}`, className: "message-status message-status-read" };
+  }
+  if (msg.dateDelivered) {
+    return { text: "Delivered", className: "message-status message-status-delivered" };
+  }
+  return { text: "Sent", className: "message-status" };
+}
+
 export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps) {
   const { resolveDisplayName } = useContactStore();
   const [reactions, setReactions] = useState<ReactionGroup[]>([]);
@@ -249,6 +275,8 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
   // Can edit/unsend: own message, not temp, not already unsent
   const canModify = msg.isFromMe && !isTemp && !isUnsent;
 
+  const status = getDeliveryStatus(msg);
+
   return (
     <div key={msg.guid} style={{ position: "relative" }}>
       <div
@@ -376,14 +404,10 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
           </div>
         )}
       </div>
-      <div style={{
+      <div className={status.className} style={{
         textAlign: msg.isFromMe ? "right" : "left",
-        fontSize: 11,
-        color: hasError ? "var(--danger)" : "var(--muted)",
-        padding: "2px 4px",
-        opacity: 0.7,
       }}>
-        {hasError ? "Failed to send" : isTemp ? "Sending..." : formatTime(msg.dateCreated)}
+        {status.text}
       </div>
     </div>
   );

@@ -6,6 +6,8 @@ import { outgoingQueue } from '../services/outgoingQueue';
 import { REACTION_TYPE_MAP } from '../components/chat/ReactionPicker';
 import { useMessageStore } from '../stores/messageStore';
 
+import { getDeliveryStatus } from '../components/chat/MessageBubble';
+
 // Mock http methods
 vi.mock('../services/http', () => ({
   http: {
@@ -275,5 +277,82 @@ describe('Message Editing & Unsending', () => {
     const updated = useMessageStore.getState().messages[0];
     expect(updated.text).toBeNull();
     expect(updated.dateDeleted).toBe(now);
+  });
+});
+
+describe('Read Receipts & Delivery Status', () => {
+  const baseMsg = {
+    guid: 'msg-status-1',
+    chatGuid: 'chat-1',
+    handleAddress: '+1234567890',
+    text: 'Hello',
+    subject: null,
+    dateCreated: new Date('2026-03-22T12:00:00').getTime(),
+    dateRead: null,
+    dateDelivered: null,
+    dateEdited: null,
+    dateDeleted: null,
+    isFromMe: true,
+    hasAttachments: false,
+    hasReactions: false,
+    isBookmarked: false,
+    associatedMessageGuid: null,
+    associatedMessageType: null,
+    associatedMessagePart: null,
+    threadOriginatorGuid: null,
+    threadOriginatorPart: null,
+    expressiveSendStyleId: null,
+    error: 0,
+    itemType: null,
+    groupTitle: null,
+    groupActionType: null,
+    balloonBundleId: null,
+    attributedBody: null,
+    messageSummaryInfo: null,
+    payloadData: null,
+    metadata: null,
+  };
+
+  it('returns "Sending…" for temp messages', () => {
+    const msg = { ...baseMsg, guid: 'temp-12345-abc' };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toBe('Sending…');
+    expect(result.className).toBe('message-status');
+  });
+
+  it('returns "Failed to send" for error messages', () => {
+    const msg = { ...baseMsg, error: 4 };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toBe('Failed to send');
+    expect(result.className).toContain('message-status-error');
+  });
+
+  it('returns "Read {time}" when dateRead is set', () => {
+    const readDate = new Date('2026-03-22T12:05:00').getTime();
+    const msg = { ...baseMsg, dateDelivered: readDate - 60000, dateRead: readDate };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toMatch(/^Read \d{1,2}:\d{2}\s[AP]M$/);
+    expect(result.className).toContain('message-status-read');
+  });
+
+  it('returns "Delivered" when dateDelivered is set but dateRead is not', () => {
+    const msg = { ...baseMsg, dateDelivered: Date.now(), dateRead: null };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toBe('Delivered');
+    expect(result.className).toContain('message-status-delivered');
+  });
+
+  it('returns "Sent" for outgoing messages with no delivery/read info', () => {
+    const msg = { ...baseMsg };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toBe('Sent');
+    expect(result.className).toBe('message-status');
+  });
+
+  it('returns the formatted time for incoming messages', () => {
+    const msg = { ...baseMsg, isFromMe: false };
+    const result = getDeliveryStatus(msg);
+    expect(result.text).toMatch(/^\d{1,2}:\d{2}\s[AP]M$/);
+    expect(result.className).toBe('message-status');
   });
 });

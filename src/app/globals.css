@@ -807,3 +807,26 @@ body {
   color: var(--danger) !important;
   border-color: rgba(239, 68, 68, 0.3) !important;
 }
+
+/* ─── Message Delivery Status ─────────────────────── */
+.message-status {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 2px 4px;
+  opacity: 0.7;
+}
+
+.message-status-read {
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.message-status-delivered {
+  opacity: 0.75;
+}
+
+.message-status-error {
+  color: var(--danger);
+  opacity: 1;
+}
+
