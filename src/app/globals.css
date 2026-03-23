@@ -518,6 +518,8 @@ body {
   backdrop-filter: blur(16px);
   z-index: 100;
   animation: reaction-picker-in 0.15s ease-out;
+  /* Create new stacking context — prevents blue bubble bg from compositing through emoji glyphs */
+  isolation: isolate;
 }
 
 @keyframes reaction-picker-in {
