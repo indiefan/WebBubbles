@@ -210,7 +210,7 @@ describe('Replies', () => {
     });
 
     // The optimistic message should have threadOriginatorGuid set
-    const msgs = useMessageStore.getState().messages;
+    const msgs = useMessageStore.getState().slices['chat-1']?.messages ?? [];
     const optimistic = msgs.find((m) => m.guid === 'temp-reply-2');
     expect(optimistic).toBeDefined();
     expect(optimistic!.threadOriginatorGuid).toBe('parent-msg-guid');
@@ -247,13 +247,13 @@ describe('Message Editing & Unsending', () => {
       error: 0,
     } as any;
 
-    useMessageStore.getState().addMessage(msg);
-    expect(useMessageStore.getState().messages[0].text).toBe('Original text');
+    useMessageStore.getState().addMessage('chat-1', msg);
+    expect(useMessageStore.getState().slices['chat-1']?.messages[0].text).toBe('Original text');
 
     const now = Date.now();
-    useMessageStore.getState().updateMessage('msg-edit-1', { text: 'Edited text', dateEdited: now });
+    useMessageStore.getState().updateMessage('chat-1', 'msg-edit-1', { text: 'Edited text', dateEdited: now });
 
-    const updated = useMessageStore.getState().messages[0];
+    const updated = useMessageStore.getState().slices['chat-1']?.messages[0];
     expect(updated.text).toBe('Edited text');
     expect(updated.dateEdited).toBe(now);
   });
@@ -270,13 +270,13 @@ describe('Message Editing & Unsending', () => {
       error: 0,
     } as any;
 
-    useMessageStore.getState().addMessage(msg);
-    expect(useMessageStore.getState().messages[0].text).toBe('Will be unsent');
+    useMessageStore.getState().addMessage('chat-1', msg);
+    expect(useMessageStore.getState().slices['chat-1']?.messages[0].text).toBe('Will be unsent');
 
     const now = Date.now();
-    useMessageStore.getState().updateMessage('msg-unsend-1', { text: null, dateDeleted: now });
+    useMessageStore.getState().updateMessage('chat-1', 'msg-unsend-1', { text: null, dateDeleted: now });
 
-    const updated = useMessageStore.getState().messages[0];
+    const updated = useMessageStore.getState().slices['chat-1']?.messages[0];
     expect(updated.text).toBeNull();
     expect(updated.dateDeleted).toBe(now);
   });
@@ -472,5 +472,66 @@ describe('Pinned Chats', () => {
     const pinned2 = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-2');
     expect(pinned2.isPinned).toBe(true);
     expect(pinned2.pinIndex).toBe(1); // max existing (0) + 1
+  });
+});
+
+describe('Chat-Keyed Message Store', () => {
+  beforeEach(() => {
+    useMessageStore.getState().clear();
+  });
+
+  it('messages for chat-A do not appear in chat-B slice', () => {
+    const msgA = {
+      guid: 'msg-a-1',
+      chatGuid: 'chat-A',
+      text: 'Hello from A',
+      dateCreated: Date.now(),
+      isFromMe: false,
+      error: 0,
+    } as any;
+
+    useMessageStore.getState().addMessage('chat-A', msgA);
+
+    // Chat-A should have the message
+    const sliceA = useMessageStore.getState().slices['chat-A'];
+    expect(sliceA?.messages).toHaveLength(1);
+    expect(sliceA?.messages[0].text).toBe('Hello from A');
+
+    // Chat-B should be empty
+    const sliceB = useMessageStore.getState().slices['chat-B'];
+    expect(sliceB?.messages ?? []).toHaveLength(0);
+  });
+
+  it('evicts the oldest non-active slice when MAX_CACHED_CHATS is exceeded', async () => {
+    const { MAX_CACHED_CHATS } = await import('../stores/messageStore');
+
+    // Fill up to the limit
+    for (let i = 0; i < MAX_CACHED_CHATS; i++) {
+      useMessageStore.getState().addMessage(`chat-${i}`, {
+        guid: `msg-${i}`,
+        chatGuid: `chat-${i}`,
+        text: `msg ${i}`,
+        dateCreated: Date.now() + i, // ensure different lastAccessed
+        isFromMe: false,
+        error: 0,
+      } as any);
+    }
+
+    expect(Object.keys(useMessageStore.getState().slices)).toHaveLength(MAX_CACHED_CHATS);
+
+    // Add one more — should trigger eviction of the oldest (chat-0)
+    useMessageStore.getState().addMessage('chat-overflow', {
+      guid: 'msg-overflow',
+      chatGuid: 'chat-overflow',
+      text: 'overflow',
+      dateCreated: Date.now() + 100,
+      isFromMe: false,
+      error: 0,
+    } as any);
+
+    const sliceKeys = Object.keys(useMessageStore.getState().slices);
+    expect(sliceKeys).toHaveLength(MAX_CACHED_CHATS);
+    expect(sliceKeys).toContain('chat-overflow');
+    expect(sliceKeys).not.toContain('chat-0'); // oldest evicted
   });
 });

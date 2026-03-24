@@ -26,7 +26,7 @@ Duplicate check (Set of 200 recent GUIDs)
   ↓
 Convert server payload → MessageRecord
   ↓
-Upsert to IndexedDB + messageStore
+Upsert to IndexedDB + messageStore (chat-scoped: addMessage(chatGuid, msg))
   ↓
 Update chat.lastMessage + hasUnreadMessage (if not active chat)
   ↓

@@ -18,7 +18,9 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const { guid: rawGuid } = use(params);
   const guid = decodeURIComponent(rawGuid);
 
-  const { messages, loading, setMessages, setLoading, setHasMore, clear } = useMessageStore();
+  const messages = useMessageStore((s) => s.slices[guid]?.messages ?? []);
+  const loading = useMessageStore((s) => s.slices[guid]?.loading ?? false);
+  const { setMessages, setLoading, setHasMore } = useMessageStore.getState();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
@@ -61,11 +63,10 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
 
   // Load messages
   useEffect(() => {
-    clear();
     isNearBottomRef.current = true; // Reset scroll state on chat switch
 
     const load = async () => {
-      setLoading(true);
+      setLoading(guid, true);
       try {
         // Try IndexedDB first (sorted ASC — oldest first)
         const cached = await db.messages
@@ -75,7 +76,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
           .toArray();
 
         if (cached.length > 0) {
-          setMessages(cached);
+          setMessages(guid, cached);
         }
 
         // Then fetch fresh from server (API returns DESC, we reverse to ASC)
@@ -85,15 +86,15 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
 
         if (serverMsgs.length > 0) {
           await db.messages.bulkPut(serverMsgs);
-          setMessages(serverMsgs);
-          setHasMore(serverMsgs.length >= 50);
+          setMessages(guid, serverMsgs);
+          setHasMore(guid, serverMsgs.length >= 50);
         } else {
-          setHasMore(false);
+          setHasMore(guid, false);
         }
       } catch (err) {
         console.error("[MessageView] Failed to load messages:", err);
       } finally {
-        setLoading(false);
+        setLoading(guid, false);
         // Always scroll to bottom on initial load
         requestAnimationFrame(() => {
           messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
@@ -102,7 +103,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     };
 
     load();
-  }, [guid, clear, setMessages, setLoading, setHasMore]);
+  }, [guid, setMessages, setLoading, setHasMore]);
 
   const formatDateSeparator = (ts: number) => {
     const date = new Date(ts);

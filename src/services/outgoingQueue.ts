@@ -58,7 +58,7 @@ class OutgoingQueue {
 
     // Add to DB and store optimistically
     await db.messages.put(optimistic);
-    useMessageStore.getState().addMessage(optimistic);
+    useMessageStore.getState().addMessage(item.chatGuid, optimistic);
     useChatStore.getState().updateChatLastMessage(
       item.chatGuid,
       item.text,
@@ -105,13 +105,13 @@ class OutgoingQueue {
         // Replace temp with real in DB
         await db.messages.delete(item.tempGuid);
         await db.messages.put(record);
-        useMessageStore.getState().replaceTempGuid(item.tempGuid, record.guid, record);
+        useMessageStore.getState().replaceTempGuid(item.chatGuid, item.tempGuid, record.guid, record);
       }
     } catch (err: any) {
       console.error('[OutgoingQueue] Send failed:', err);
       // Mark message as errored
       await db.messages.update(item.tempGuid, { error: 1 });
-      useMessageStore.getState().updateMessage(item.tempGuid, { error: 1 });
+      useMessageStore.getState().updateMessage(item.chatGuid, item.tempGuid, { error: 1 });
     } finally {
       this.processing = false;
       this.processNext();

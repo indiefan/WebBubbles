@@ -241,7 +241,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
       // Optimistically update local state
       const updates = { text: trimmed, dateEdited: Date.now() };
       await db.messages.update(msg.guid, updates);
-      useMessageStore.getState().updateMessage(msg.guid, updates);
+      useMessageStore.getState().updateMessage(chatGuid, msg.guid, updates);
       setIsEditing(false);
     } catch (err) {
       console.error("[MessageBubble] Edit failed:", err);
@@ -257,7 +257,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
       // Optimistically update local state
       const updates = { dateDeleted: Date.now(), text: null };
       await db.messages.update(msg.guid, updates);
-      useMessageStore.getState().updateMessage(msg.guid, updates);
+      useMessageStore.getState().updateMessage(chatGuid, msg.guid, updates);
     } catch (err) {
       console.error("[MessageBubble] Unsend failed:", err);
     }

@@ -270,7 +270,7 @@ describe('Full Sync Integration', () => {
       }),
     );
     await globalDb.messages.put(optimistic);
-    useMessageStore.getState().addMessage(optimistic);
+    useMessageStore.getState().addMessage(optimistic.chatGuid, optimistic);
 
     const realGuid = `real-${tempGuid}`;
     const newMsgData = mockMessageData({
@@ -291,7 +291,7 @@ describe('Full Sync Integration', () => {
     expect(realMsg).toBeDefined();
 
     const state = useMessageStore.getState();
-    const storeMsgs = state.messages.filter(m => m.text === 'Optimistic socket race');
+    const storeMsgs = (state.slices[optimistic.chatGuid]?.messages ?? []).filter(m => m.text === 'Optimistic socket race');
     expect(storeMsgs).toHaveLength(1);
     expect(storeMsgs[0].guid).toBe(realGuid);
     

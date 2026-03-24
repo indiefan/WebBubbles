@@ -8,10 +8,12 @@ All client state is managed via Zustand stores in `src/stores/`.
 |---|---|---|
 | `connectionStore` | `serverAddress`, `password`, `socketState`, `isSetup` | localStorage |
 | `chatStore` | `chats[]`, `activeChatGuid` | IndexedDB (via sync) |
-| `messageStore` | `messages[]` (active chat), `loading`, `hasMore` | IndexedDB (via sync) |
+| `messageStore` | `slices: Record<chatGuid, ChatMessageSlice>`, `replyToMessage` | IndexedDB (via sync) |
 | `contactStore` | `contacts Map`, `handles Map`, `handleContactMap` | IndexedDB (via sync) |
 | `syncStore` | `lastFullSync`, `lastIncrementalSync`, sync progress | localStorage |
 | `downloadStore` | `loading{}`, `progress{}` per attachment GUID | In-memory only |
+
+> **Note:** `messageStore` maintains one `ChatMessageSlice` per opened chat, with LRU eviction at 10 slices. See [chat-keyed-message-store.md](./chat-keyed-message-store.md) for details.
 
 ## Reactivity Model
 

@@ -95,14 +95,16 @@ async function handleNewMessage(rawData: any) {
   if (data.tempGuid) {
     await db.messages.delete(data.tempGuid);
     // Replace the temp message in the store to avoid duplicates if socket beats HTTP
-    useMessageStore.getState().replaceTempGuid(data.tempGuid, msg.guid, msg);
+    useMessageStore.getState().replaceTempGuid(msg.chatGuid, data.tempGuid, msg.guid, msg);
   }
 
   // Upsert to IndexedDB
   await db.messages.put(msg);
 
-  // Update store (if this is the active chat)
-  useMessageStore.getState().addMessage(msg);
+  // Update store (scoped to the message's chat)
+  if (msg.chatGuid) {
+    useMessageStore.getState().addMessage(msg.chatGuid, msg);
+  }
 
   // Update chat's lastMessage
   if (msg.chatGuid) {
@@ -164,7 +166,9 @@ async function handleUpdatedMessage(rawData: any) {
 
   const msg = serverMessageToRecord(data);
   await db.messages.put(msg);
-  useMessageStore.getState().updateMessage(msg.guid, msg);
+  if (msg.chatGuid) {
+    useMessageStore.getState().updateMessage(msg.chatGuid, msg.guid, msg);
+  }
 }
 
 function handleTypingIndicator(data: any) {
