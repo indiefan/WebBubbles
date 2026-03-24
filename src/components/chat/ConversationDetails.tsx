@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import { db, AttachmentRecord, ChatRecord } from "@/lib/db";
 import { http } from "@/services/http";
 import { useContactStore } from "@/stores/contactStore";
 import { useChatStore } from "@/stores/chatStore";
 import { downloadService } from "@/services/downloads";
+import { chatIconCache } from "@/services/chatIconCache";
 
 interface ConversationDetailsProps {
   chat: ChatRecord;
@@ -19,8 +20,53 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
   const [addAddress, setAddAddress] = useState("");
   const [renameText, setRenameText] = useState(chat.displayName || "");
   const [loading, setLoading] = useState(false);
+  const [iconUrl, setIconUrl] = useState<string | null>(null);
+  const [iconUploading, setIconUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isGroup = (chat.participantHandleAddresses?.length ?? 0) > 1;
+
+  // Load chat icon
+  useEffect(() => {
+    if (!isGroup) return;
+    chatIconCache.getChatIconUrl(chat.guid).then(url => setIconUrl(url));
+  }, [chat.guid, isGroup]);
+
+  const handleIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIconUploading(true);
+    try {
+      await http.setChatIcon(chat.guid, file);
+      chatIconCache.invalidate(chat.guid);
+      const url = await chatIconCache.getChatIconUrl(chat.guid);
+      setIconUrl(url);
+      await db.chats.update(chat.guid, { customAvatarPath: 'custom' });
+      const updated = await db.chats.get(chat.guid);
+      if (updated) useChatStore.getState().upsertChat(updated);
+    } catch (err: any) {
+      alert("Icon upload failed: " + err.message);
+    } finally {
+      setIconUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleIconDelete = async () => {
+    setIconUploading(true);
+    try {
+      await http.deleteChatIcon(chat.guid);
+      chatIconCache.invalidate(chat.guid);
+      setIconUrl(null);
+      await db.chats.update(chat.guid, { customAvatarPath: null });
+      const updated = await db.chats.get(chat.guid);
+      if (updated) useChatStore.getState().upsertChat(updated);
+    } catch (err: any) {
+      alert("Remove icon failed: " + err.message);
+    } finally {
+      setIconUploading(false);
+    }
+  };
 
   // Load shared media attachments for this chat
   useEffect(() => {
@@ -137,6 +183,50 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
         </button>
       </div>
+
+      {/* Chat Icon (group chats only) */}
+      {isGroup && (
+        <div style={sectionStyle}>
+          <div style={labelStyle}>Chat Icon</div>
+          <div className="chat-icon-section">
+            <div className="chat-icon-preview" onClick={() => fileInputRef.current?.click()}>
+              {iconUrl ? (
+                <img src={iconUrl} alt="Chat icon" />
+              ) : (
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" strokeWidth="1.5">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleIconUpload}
+              style={{ display: 'none' }}
+            />
+            <div className="chat-icon-actions">
+              <button
+                className="chat-icon-btn chat-icon-btn-primary"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={iconUploading}
+              >
+                {iconUploading ? 'Uploading...' : (iconUrl ? 'Change' : 'Upload')}
+              </button>
+              {iconUrl && (
+                <button
+                  className="chat-icon-btn chat-icon-btn-danger"
+                  onClick={handleIconDelete}
+                  disabled={iconUploading}
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Participants */}
       <div style={sectionStyle}>

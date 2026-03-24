@@ -14,6 +14,7 @@ import { formatDistanceToNow } from "date-fns";
 import { NewChatModal } from "@/components/chat/NewChatModal";
 import { SearchPanel } from "@/components/search/SearchPanel";
 import { syncContacts } from "@/services/sync";
+import { chatIconCache } from "@/services/chatIconCache";
 
 export default function ChatsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -26,6 +27,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
+  const [chatIconUrls, setChatIconUrls] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!isSetup) {
@@ -68,6 +70,18 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
     loadChats();
   }, [isSetup, serverAddress, password, router, setChats]);
+
+  // Load chat icons for chats with custom avatars
+  useEffect(() => {
+    const chatsWithIcons = chats.filter(c => c.customAvatarPath);
+    for (const chat of chatsWithIcons) {
+      if (!chatIconUrls[chat.guid]) {
+        chatIconCache.getChatIconUrl(chat.guid).then(url => {
+          if (url) setChatIconUrls(prev => ({ ...prev, [chat.guid]: url }));
+        });
+      }
+    }
+  }, [chats]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filteredChats = searchQuery
     ? chats.filter(
@@ -256,7 +270,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                           title={name}
                         >
                           <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
-                            {getInitials(name)}
+                            {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(name)}
                           </div>
                           {chat.hasUnreadMessage && <span className="pinned-unread-dot" />}
                           <span className="pinned-chat-name">{name.split(" ")[0]}</span>
@@ -286,7 +300,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                   }}
                 >
                   <div className="avatar">
-                    {getInitials(resolveChatDisplayName(chat))}
+                    {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(resolveChatDisplayName(chat))}
                   </div>
                   <div className="chat-info">
                     <div className="chat-title-row">

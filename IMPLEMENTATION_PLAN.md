@@ -794,7 +794,7 @@ The mobile app handles thousands of messages per chat. The web app must match th
 
 - [x] Search: local + server, date range filter, per-chat filter
 - [x] Group chat management: create, rename, add/remove participants, leave
-- [ ] Chat icon upload and display
+- [x] Chat icon upload and display
 - [x] Conversation details panel: participants, shared media grid, shared links
 - [x] New chat creator with contact search
 - [x] Contact sync and display name resolution

@@ -277,6 +277,80 @@ body {
   font-size: 18px;
   color: white;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+/* ─── Chat Icon Section (Details Panel) ────────────── */
+.chat-icon-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-icon-preview {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4b5563, #374151);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.chat-icon-preview:hover {
+  opacity: 0.85;
+}
+
+.chat-icon-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chat-icon-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-icon-btn {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.15s ease;
+}
+
+.chat-icon-btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.chat-icon-btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.chat-icon-btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.chat-icon-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
 }
 
 .chat-info {

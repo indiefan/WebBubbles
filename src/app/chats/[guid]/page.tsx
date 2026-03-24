@@ -11,6 +11,7 @@ import { format, isToday, isYesterday } from "date-fns";
 import { ComposeArea } from "@/components/chat/ComposeArea";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationDetails } from "@/components/chat/ConversationDetails";
+import { chatIconCache } from "@/services/chatIconCache";
 
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
 
@@ -26,6 +27,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const isNearBottomRef = useRef(true);
   const isInitialLoadRef = useRef(true);
   const [showDetails, setShowDetails] = useState(false);
+  const [chatIconUrl, setChatIconUrl] = useState<string | null>(null);
 
   // ─── Sticky auto-scroll ──────────────────────────────
   const scrollToBottom = useCallback(() => {
@@ -60,6 +62,15 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     return () => {
       useChatStore.getState().setActiveChatGuid(null);
     };
+  }, [guid]);
+
+  // Load chat icon
+  useEffect(() => {
+    setChatIconUrl(null);
+    const chat = useChatStore.getState().chats.find(c => c.guid === guid);
+    if (chat?.customAvatarPath) {
+      chatIconCache.getChatIconUrl(guid).then(url => setChatIconUrl(url));
+    }
   }, [guid]);
 
   // Load messages
@@ -176,7 +187,12 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     <div style={{ display: "flex", height: "100%" }}>
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
         <div className="chat-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h3 style={{ fontSize: 16, fontWeight: 600 }}>{chatTitle}</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div className="avatar" style={{ width: 32, height: 32, fontSize: 13 }}>
+              {chatIconUrl ? <img src={chatIconUrl} alt="" /> : (chatTitle.charAt(0).toUpperCase() || "#")}
+            </div>
+            <h3 style={{ fontSize: 16, fontWeight: 600 }}>{chatTitle}</h3>
+          </div>
           <button
             onClick={() => setShowDetails(!showDetails)}
             title="Details"
