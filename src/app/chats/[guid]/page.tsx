@@ -24,6 +24,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messageListRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
+  const isInitialLoadRef = useRef(true);
   const [showDetails, setShowDetails] = useState(false);
 
   // ─── Sticky auto-scroll ──────────────────────────────
@@ -40,10 +41,10 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     isNearBottomRef.current = distFromBottom < 150;
   }, []);
 
-  // Auto-scroll when messages change (only if near bottom)
+  // Auto-scroll when messages change (only if near bottom and NOT initial load)
   useEffect(() => {
+    if (isInitialLoadRef.current) return; // skip — initial load handles its own scroll
     if (isNearBottomRef.current && messages.length > 0) {
-      // Use requestAnimationFrame to wait for DOM update
       requestAnimationFrame(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
       });
@@ -63,7 +64,8 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
 
   // Load messages
   useEffect(() => {
-    isNearBottomRef.current = true; // Reset scroll state on chat switch
+    isNearBottomRef.current = true;
+    isInitialLoadRef.current = true;
 
     const load = async () => {
       setLoading(guid, true);
@@ -95,9 +97,11 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
         console.error("[MessageView] Failed to load messages:", err);
       } finally {
         setLoading(guid, false);
-        // Always scroll to bottom on initial load
+        // Instant scroll on initial load (no animation)
         requestAnimationFrame(() => {
           messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
+          // Allow smooth scrolling for future new messages
+          isInitialLoadRef.current = false;
         });
       }
     };
