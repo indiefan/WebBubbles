@@ -85,8 +85,10 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
         const cached = await db.messages
           .where("[chatGuid+dateCreated]")
           .between([guid, -Infinity], [guid, Infinity])
+          .reverse()
           .limit(50)
           .toArray();
+        cached.reverse(); // back to ASC (oldest-first) for rendering
 
         if (cached.length > 0) {
           setMessages(guid, cached);
