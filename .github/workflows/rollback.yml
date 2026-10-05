@@ -4,9 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Image tag to roll back to (short SHA from a previous deploy)"
+        description: "Image tag to roll back to (a version from a previous deploy, e.g. 0.0.19)"
         required: true
         type: string
+
+# Shares the deploy queue so a rollback never races a deploy
+concurrency:
+  group: deploy
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -20,7 +25,7 @@ jobs:
 
     steps:
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -36,11 +41,24 @@ jobs:
           docker buildx imagetools create --tag "$TARGET" "$SOURCE"
 
       - name: Trigger Portainer webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.PORTAINER_WEBHOOK_URL }}
         run: |
-          curl -sf -X POST "${{ secrets.PORTAINER_WEBHOOK_URL }}" \
-            || echo "::warning::Portainer webhook failed — stack may need manual update"
+          # -s without -S: curl's own errors can print the host, and this repo's logs are public
+          curl -fs -o /dev/null -X POST "$WEBHOOK_URL" \
+            --retry 5 --retry-delay 15 --retry-all-errors --max-time 30 \
+            || { echo "::error::Portainer webhook failed (curl exit $?) — the stack was not updated"; exit 1; }
 
       - name: Summary
+        env:
+          HEALTH_URL: ${{ secrets.DEPLOY_HEALTH_URL }}
         run: |
-          echo "## Rollback complete" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Rollback triggered" >> "$GITHUB_STEP_SUMMARY"
           echo "Rolled back to image tag: \`${{ inputs.tag }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+          # Old images only report their commit, so show what is live rather than assert on it
+          if [ -n "$HEALTH_URL" ]; then
+            sleep 60
+            LIVE=$(curl -fs --max-time 10 "$HEALTH_URL" | jq -r '.version' 2>/dev/null || true)
+            echo "Live commit after 60s: \`${LIVE:-unreachable}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi

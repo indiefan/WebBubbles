@@ -446,8 +446,8 @@ describe('Pinned Chats', () => {
     useChatStore.getState().togglePin('chat-1');
 
     const updated = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-1');
-    expect(updated.isPinned).toBe(true);
-    expect(updated.pinIndex).toBe(0);
+    expect(updated!.isPinned).toBe(true);
+    expect(updated!.pinIndex).toBe(0);
   });
 
   it('togglePin unpins a pinned chat', () => {
@@ -457,8 +457,8 @@ describe('Pinned Chats', () => {
     useChatStore.getState().togglePin('chat-1');
 
     const updated = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-1');
-    expect(updated.isPinned).toBe(false);
-    expect(updated.pinIndex).toBe(0);
+    expect(updated!.isPinned).toBe(false);
+    expect(updated!.pinIndex).toBe(0);
   });
 
   it('assigns incrementing pinIndex when pinning multiple chats', () => {
@@ -470,8 +470,8 @@ describe('Pinned Chats', () => {
     useChatStore.getState().togglePin('chat-2');
 
     const pinned2 = useChatStore.getState().chats.find((c: any) => c.guid === 'chat-2');
-    expect(pinned2.isPinned).toBe(true);
-    expect(pinned2.pinIndex).toBe(1); // max existing (0) + 1
+    expect(pinned2!.isPinned).toBe(true);
+    expect(pinned2!.pinIndex).toBe(1); // max existing (0) + 1
   });
 });
 
