@@ -2,6 +2,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import { useConnectionStore, SocketState } from '@/stores/connectionStore';
+import { DEV_READ_ONLY } from './devSession';
 
 export type SocketEventHandler = (data: any) => void;
 
@@ -97,6 +98,7 @@ export class SocketService {
 
   /** Emit an event to the server (e.g. typing indicators). */
   sendEvent(event: string, data: any) {
+    if (DEV_READ_ONLY) return;
     if (this.socket?.connected) {
       this.socket.emit(event, data);
     }

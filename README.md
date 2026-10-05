@@ -64,11 +64,23 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) and enter your BlueBubbles server URL and password.
 
+#### Signing in to the dev build automatically (macOS)
+
+```bash
+npm run dev:login -- https://your-bluebubbles-server
+```
+
+This asks for the server password once and stores it in your login keychain. From then on `npm run dev` signs itself in. Run `npm run dev:login -- --remove` to undo it.
+
+The dev build is **read-only** against the server: it will not send messages, reactions, read receipts or typing indicators. Start it with `NEXT_PUBLIC_BB_DEV_ALLOW_WRITES=1 npm run dev` to lift that.
+
 #### Available Scripts
 
 | Command | Description |
 |---------|-------------|
-| `npm run dev` | Start dev server (Turbopack) |
+| `npm run dev` | Start dev server (Turbopack), bound to localhost |
+| `npm run dev:login` | Save a dev sign-in to the macOS keychain |
+| `npm run typecheck` | TypeScript check |
 | `npm run build` | Production build |
 | `npm run start` | Start production server |
 | `npm run test` | Run unit + integration tests |

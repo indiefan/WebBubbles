@@ -8,6 +8,7 @@ import { http } from "@/services/http";
 import { socketService } from "@/services/socket";
 import { registerActionHandlers } from "@/services/actionHandler";
 import { runFullSync } from "@/services/sync";
+import { fetchDevSession } from "@/services/devSession";
 
 export default function SetupPage() {
   const router = useRouter();
@@ -26,9 +27,8 @@ export default function SetupPage() {
     }
   }, [serverAddress, password, router]);
 
-  const handleConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!url || !pw) {
+  const connect = async (serverUrl: string, serverPassword: string) => {
+    if (!serverUrl || !serverPassword) {
       setError("Please fill in both fields");
       return;
     }
@@ -38,8 +38,8 @@ export default function SetupPage() {
       setPhase("connecting");
 
       // Configure services
-      const cleanUrl = url.replace(/\/$/, "");
-      http.configure(cleanUrl, pw);
+      const cleanUrl = serverUrl.replace(/\/$/, "");
+      http.configure(cleanUrl, serverPassword);
 
       // Test connection
       await http.ping();
@@ -56,10 +56,10 @@ export default function SetupPage() {
       }
 
       // Save credentials
-      setCredentials(cleanUrl, pw);
+      setCredentials(cleanUrl, serverPassword);
 
       // Set up socket
-      socketService.connect(cleanUrl, pw);
+      socketService.connect(cleanUrl, serverPassword);
       registerActionHandlers();
 
       // Run full sync
@@ -72,6 +72,26 @@ export default function SetupPage() {
       setPhase("form");
     }
   };
+
+  const handleConnect = (e: React.FormEvent) => {
+    e.preventDefault();
+    connect(url, pw);
+  };
+
+  // Dev builds sign themselves in from the keychain (see scripts/dev-login.sh)
+  useEffect(() => {
+    if (serverAddress && password && useSyncStore.getState().lastFullSync) return;
+    let cancelled = false;
+    fetchDevSession().then((session) => {
+      if (!session || cancelled) return;
+      setUrl(session.serverUrl);
+      setPw(session.password);
+      connect(session.serverUrl, session.password);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="setup-container">

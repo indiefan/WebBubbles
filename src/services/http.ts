@@ -1,6 +1,8 @@
 // Full HTTP service wrapping the BlueBubbles server REST API.
 // All methods pass `guid` query param for auth, use no-store cache, and include error handling.
 
+import { DEV_READ_ONLY, isWriteRequest } from './devSession';
+
 type RequestOptions = {
   signal?: AbortSignal;
   onProgress?: (loaded: number, total: number) => void;
@@ -11,6 +13,8 @@ export class HttpService {
   private password = '';
   private timeout = 30_000;
   private customHeaders: Record<string, string> = {};
+  /** When set, requests that would change anything on the server are refused. */
+  readOnly = DEV_READ_ONLY;
 
   configure(serverAddress: string, password: string) {
     this.baseUrl = serverAddress.replace(/\/$/, '');
@@ -48,6 +52,10 @@ export class HttpService {
       timeoutMs?: number;
     } = {},
   ): Promise<T> {
+    if (this.readOnly && isWriteRequest(method, path)) {
+      throw new Error(`Read-only mode: blocked ${method} ${path}`);
+    }
+
     const url = `${this.apiRoot}${path}?${this.params(opts.query)}`;
     const controller = new AbortController();
     const timeoutMs = opts.timeoutMs ?? this.timeout;

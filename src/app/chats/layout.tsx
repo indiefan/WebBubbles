@@ -15,6 +15,7 @@ import { NewChatModal } from "@/components/chat/NewChatModal";
 import { SearchPanel } from "@/components/search/SearchPanel";
 import { syncContacts } from "@/services/sync";
 import { chatIconCache } from "@/services/chatIconCache";
+import { DEV_READ_ONLY } from "@/services/devSession";
 
 export default function ChatsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -122,6 +123,14 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
             <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>
               v{process.env.NEXT_PUBLIC_APP_VERSION || "dev"}
             </span>
+            {DEV_READ_ONLY && (
+              <span
+                title="Dev build: nothing is sent to the server. Set NEXT_PUBLIC_BB_DEV_ALLOW_WRITES=1 to allow writes."
+                style={{ fontSize: 10, color: "orange", fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}
+              >
+                read-only
+              </span>
+            )}
           </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* Connection indicator */}

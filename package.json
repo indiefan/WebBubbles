@@ -3,7 +3,8 @@
   "version": "0.0.19",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "BB_DEV_SESSION=1 next dev -H 127.0.0.1",
+    "dev:login": "bash scripts/dev-login.sh",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
