@@ -327,8 +327,11 @@ export class HttpService {
   }
 
   // ─── Contacts ────────────────────────────────────────
-  getContacts() {
-    return this.request('GET', '/contact');
+  /** @param withAvatars also return each contact's picture as base64 (a much larger response) */
+  getContacts(opts: { withAvatars?: boolean } = {}) {
+    return this.request('GET', '/contact', {
+      query: { extraProperties: opts.withAvatars ? 'avatar' : undefined },
+    });
   }
 
   // ─── FCM ─────────────────────────────────────────────

@@ -286,6 +286,52 @@ body {
   border-radius: 50%;
 }
 
+/* Two members of a group, overlapping */
+.avatar-cluster {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.avatar-cluster-back,
+.avatar-cluster-front {
+  position: absolute;
+}
+
+.avatar-cluster-back {
+  top: 0;
+  left: 0;
+}
+
+.avatar-cluster-front {
+  bottom: 0;
+  right: 0;
+  border-radius: 50%;
+  /* A ring in the sidebar colour separates the two faces */
+  box-shadow: 0 0 0 2px rgb(15, 16, 20);
+}
+
+/* Sender's face beside an incoming bubble in a group chat */
+.message-row.with-avatar {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.message-row-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  /* Lines the face up with the bubble rather than the status line under it */
+  margin-bottom: 20px;
+}
+
+.message-row-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
 /* ─── Chat Icon Section (Details Panel) ────────────── */
 .chat-icon-section {
   display: flex;

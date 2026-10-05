@@ -8,6 +8,7 @@ import { useContactStore } from "@/stores/contactStore";
 import { useChatStore } from "@/stores/chatStore";
 import { downloadService } from "@/services/downloads";
 import { chatIconCache } from "@/services/chatIconCache";
+import { Avatar } from "@/components/Avatar";
 
 interface ConversationDetailsProps {
   chat: ChatRecord;
@@ -16,6 +17,7 @@ interface ConversationDetailsProps {
 
 export function ConversationDetails({ chat, onClose }: ConversationDetailsProps) {
   const resolveDisplayName = useContactStore((s) => s.resolveDisplayName);
+  const resolveAvatar = useContactStore((s) => s.resolveAvatar);
   const [sharedMedia, setSharedMedia] = useState<AttachmentRecord[]>([]);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [addAddress, setAddAddress] = useState("");
@@ -42,7 +44,7 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
       chatIconCache.invalidate(chat.guid);
       const url = await chatIconCache.getChatIconUrl(chat.guid);
       setIconUrl(url);
-      await db.chats.update(chat.guid, { customAvatarPath: 'custom' });
+      await db.chats.update(chat.guid, { customAvatarPath: 'custom', hasIcon: true, iconCheckedAt: Date.now() });
       const updated = await db.chats.get(chat.guid);
       if (updated) useChatStore.getState().upsertChat(updated);
     } catch (err: any) {
@@ -59,7 +61,7 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
       await http.deleteChatIcon(chat.guid);
       chatIconCache.invalidate(chat.guid);
       setIconUrl(null);
-      await db.chats.update(chat.guid, { customAvatarPath: null });
+      await db.chats.update(chat.guid, { customAvatarPath: null, hasIcon: false, iconCheckedAt: Date.now() });
       const updated = await db.chats.get(chat.guid);
       if (updated) useChatStore.getState().upsertChat(updated);
     } catch (err: any) {
@@ -246,9 +248,7 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
         <div style={labelStyle}>Participants ({chat.participantHandleAddresses?.length ?? 0})</div>
         {chat.participantHandleAddresses?.map(addr => (
           <div key={addr} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0" }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", backgroundColor: "var(--accent)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
-              {resolveDisplayName(addr).charAt(0).toUpperCase()}
-            </div>
+            <Avatar name={resolveDisplayName(addr)} imageUrl={resolveAvatar(addr)} size={32} />
             <span style={{ flex: 1, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{resolveDisplayName(addr)}</span>
             {isGroup && (
               <button onClick={() => handleRemoveParticipant(addr)} title="Remove" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--danger)", padding: 4, flexShrink: 0 }}>

@@ -19,8 +19,17 @@ import { startSync, stopSync } from "@/services/sync";
 import { chatIconCache } from "@/services/chatIconCache";
 import { DEV_READ_ONLY } from "@/services/devSession";
 import { useAppUpdate } from "@/services/appUpdate";
+import { Avatar, AvatarPerson } from "@/components/Avatar";
 
 const CHAT_ROW_HEIGHT = 72;
+const NO_FACE: ChatFace = { name: "", imageUrl: null };
+
+function sameFace(a: ChatFace, b: ChatFace): boolean {
+  if (a.name !== b.name || a.imageUrl !== b.imageUrl) return false;
+  const am = a.members ?? [];
+  const bm = b.members ?? [];
+  return am.length === bm.length && am.every((m, i) => m.name === bm[i].name && m.imageUrl === bm[i].imageUrl);
+}
 
 function formatTime(ts: number | null) {
   if (!ts) return "";
@@ -31,30 +40,32 @@ function formatTime(ts: number | null) {
   }
 }
 
-function getInitials(resolvedName: string) {
-  const firstChar = resolvedName.charAt(0);
-  return /[a-zA-Z]/.test(firstChar) ? firstChar.toUpperCase() : "#";
+/** What a chat's avatar is drawn from. */
+interface ChatFace {
+  name: string;
+  imageUrl: string | null;
+  /** Members of a group, for when it has no photo of its own. */
+  members?: AvatarPerson[];
 }
 
 interface ChatRowProps {
   chat: ChatRecord;
-  name: string;
+  face: ChatFace;
   active: boolean;
   iconUrl?: string;
   onOpen: (chatGuid: string) => void;
   onContextMenu: (e: React.MouseEvent, chatGuid: string) => void;
 }
 
-const ChatRow = memo(function ChatRow({ chat, name, active, iconUrl, onOpen, onContextMenu }: ChatRowProps) {
+const ChatRow = memo(function ChatRow({ chat, face, active, iconUrl, onOpen, onContextMenu }: ChatRowProps) {
+  const name = face.name;
   return (
     <div
       className={`chat-list-item ${active ? "active" : ""}`}
       onClick={() => onOpen(chat.guid)}
       onContextMenu={(e) => onContextMenu(e, chat.guid)}
     >
-      <div className="avatar">
-        {iconUrl ? <img src={iconUrl} alt="" /> : getInitials(name)}
-      </div>
+      <Avatar name={name} imageUrl={iconUrl ?? face.imageUrl} members={face.members} />
       <div className="chat-info">
         <div className="chat-title-row">
           <span className="chat-name">{name}</span>
@@ -92,6 +103,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   // Subscribing to the contact maps re-renders names once contacts finish loading
   const contacts = useContactStore((s) => s.contacts);
   const handles = useContactStore((s) => s.handles);
+  const avatarIndex = useContactStore((s) => s.avatarIndex);
   const resolveChatDisplayName = useContactStore((s) => s.resolveChatDisplayName);
   const updateAvailable = useAppUpdate();
   const [loading, setLoading] = useState(true);
@@ -149,10 +161,16 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
     return () => clearInterval(timer);
   }, []);
 
-  // Load chat icons for chats with custom avatars
+  // Find out which groups have a photo (remembered per chat, re-asked daily)
+  const chatCount = chats.length;
+  useEffect(() => {
+    if (chatCount > 0) void chatIconCache.refreshGroupIcons();
+  }, [chatCount]);
+
+  // Load the photos of groups that have one
   useEffect(() => {
     for (const chat of chats) {
-      if (chat.customAvatarPath && !chatIconUrls[chat.guid]) {
+      if ((chat.hasIcon || chat.customAvatarPath) && !chatIconUrls[chat.guid]) {
         chatIconCache.getChatIconUrl(chat.guid).then((url) => {
           if (url) setChatIconUrls((prev) => (prev[chat.guid] === url ? prev : { ...prev, [chat.guid]: url }));
         });
@@ -160,13 +178,36 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
     }
   }, [chats]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const facesRef = useRef(new Map<string, ChatFace>());
+  const faces = useMemo(() => {
+    const { resolveAvatar, resolveDisplayName } = useContactStore.getState();
+    const prev = facesRef.current;
+    const map = new Map<string, ChatFace>();
+    for (const chat of chats) {
+      const participants = chat.participantHandleAddresses ?? [];
+      const face: ChatFace = {
+        name: resolveChatDisplayName(chat),
+        imageUrl: participants.length === 1 ? resolveAvatar(participants[0]) : null,
+        members:
+          participants.length > 1
+            ? participants.slice(0, 2).map((addr) => ({ name: resolveDisplayName(addr), imageUrl: resolveAvatar(addr) }))
+            : undefined,
+      };
+      // Rows are memoized on this object, so hand back the old one when nothing changed
+      const before = prev.get(chat.guid);
+      map.set(chat.guid, before && sameFace(before, face) ? before : face);
+    }
+    facesRef.current = map;
+    return map;
+    // contacts/handles/avatarIndex are listed so faces refresh when they load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats, contacts, handles, avatarIndex, resolveChatDisplayName]);
+
   const names = useMemo(() => {
     const map = new Map<string, string>();
-    for (const chat of chats) map.set(chat.guid, resolveChatDisplayName(chat));
+    for (const [guid, face] of faces) map.set(guid, face.name);
     return map;
-    // contacts/handles are listed so names refresh when they load
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chats, contacts, handles, resolveChatDisplayName]);
+  }, [faces]);
 
   const filteredChats = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -381,9 +422,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                         onContextMenu={(e) => openContextMenu(e, chat.guid)}
                         title={name}
                       >
-                        <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
-                          {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(name)}
-                        </div>
+                        <Avatar
+                          name={name}
+                          imageUrl={chatIconUrls[chat.guid] ?? faces.get(chat.guid)?.imageUrl}
+                          members={faces.get(chat.guid)?.members}
+                          size={44}
+                        />
                         {chat.hasUnreadMessage && <span className="pinned-unread-dot" />}
                         <span className="pinned-chat-name">{name.split(" ")[0]}</span>
                       </div>
@@ -410,7 +454,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                     >
                       <ChatRow
                         chat={chat}
-                        name={names.get(chat.guid) ?? ""}
+                        face={faces.get(chat.guid) ?? NO_FACE}
                         active={isActive(chat.guid)}
                         iconUrl={chatIconUrls[chat.guid]}
                         onOpen={openChat}

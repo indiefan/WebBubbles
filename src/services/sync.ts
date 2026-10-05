@@ -16,6 +16,7 @@ import { db, ContactRecord, MessageRecord } from '@/lib/db';
 import { http } from './http';
 import { socketService } from './socket';
 import { beginHydration, endHydration, ingestChats, ingestMessages } from './ingest';
+import { prepareAvatar } from './avatars';
 import { useSyncStore } from '@/stores/syncStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useMessageStore } from '@/stores/messageStore';
@@ -40,6 +41,8 @@ const PREWARM_CHATS = 20;
 
 const CURSOR_KEY = 'rowCursor';
 const CHATS_SYNCED_KEY = 'allChatsSynced';
+const PHOTOS_SYNCED_KEY = 'contactPhotosSynced';
+const PHOTO_SYNC_INTERVAL_MS = 24 * 3600_000;
 
 const CATCH_UP_WITH = ['chats', 'attachments', 'attachment.metadata', 'attributedBody', 'messageSummaryInfo', 'payloadData'];
 
@@ -437,36 +440,32 @@ function normalizePhone(phone: string): string {
  * Sync contacts from the BlueBubbles server into IndexedDB.
  * Also links HandleRecords to contacts by matching phone/email addresses.
  *
- * Called during full sync and can be triggered manually for a refresh.
+ * Photos make the response much larger, so they are only re-fetched once a
+ * day; in between, each contact keeps the photo it already has.
  */
 export async function syncContacts() {
   try {
-    console.log('[Sync] Starting contact sync...');
-    const res = await http.getContacts();
-    const serverContacts: any[] = res?.data ?? [];
+    const lastPhotoSync = await db.getMeta<number>(PHOTOS_SYNCED_KEY);
+    const withAvatars = !lastPhotoSync || Date.now() - lastPhotoSync > PHOTO_SYNC_INTERVAL_MS;
 
-    if (serverContacts.length === 0) {
-      console.log('[Sync] No contacts returned from server');
-      return;
-    }
+    const res = await http.getContacts({ withAvatars });
+    const serverContacts: any[] = res?.data ?? [];
+    if (serverContacts.length === 0) return;
 
     // Convert server contacts to ContactRecords
-    const contactRecords: ContactRecord[] = serverContacts.map((c: any) => {
+    const contactRecords: ContactRecord[] = [];
+    for (const c of serverContacts) {
       const phones: string[] = [];
       const emails: string[] = [];
 
       // Server may return phoneNumbers/emails as arrays of objects or strings
-      if (c.phoneNumbers) {
-        for (const p of c.phoneNumbers) {
-          const addr = typeof p === 'string' ? p : p?.address ?? p?.value ?? '';
-          if (addr) phones.push(addr);
-        }
+      for (const p of c.phoneNumbers ?? []) {
+        const addr = typeof p === 'string' ? p : p?.address ?? p?.value ?? '';
+        if (addr) phones.push(addr);
       }
-      if (c.emails) {
-        for (const e of c.emails) {
-          const addr = typeof e === 'string' ? e : e?.address ?? e?.value ?? '';
-          if (addr) emails.push(addr);
-        }
+      for (const e of c.emails ?? []) {
+        const addr = typeof e === 'string' ? e : e?.address ?? e?.value ?? '';
+        if (addr) emails.push(addr);
       }
 
       // Build display name from structured name or use server-provided displayName
@@ -475,19 +474,34 @@ export async function syncContacts() {
         displayName = [c.firstName, c.lastName].filter(Boolean).join(' ');
       }
 
-      return {
-        id: c.id ?? c.sourceId ?? `contact-${phones[0] ?? emails[0] ?? Math.random()}`,
+      // The same person can come from the Mac's Contacts ("api") and from the
+      // server's own contact list ("db"), whose ids are unrelated
+      const rawId = c.id ?? c.sourceId ?? `${phones[0] ?? emails[0] ?? Math.random()}`;
+      contactRecords.push({
+        id: `${c.sourceType ?? 'contact'}:${rawId}`,
         displayName: displayName || 'Unknown',
         phones,
         emails,
         structuredName: c.structuredName ?? c.name ?? null,
-        avatarHash: c.avatar ? String(c.avatar).slice(0, 16) : null,
-      };
-    });
+        avatarHash: null,
+        // Pictures in the Mac's Contacts were all chosen by someone; the
+        // server's own list also holds generated letter tiles
+        avatar: withAvatars ? await prepareAvatar(c.avatar, c.sourceType === 'api') : undefined,
+      });
+    }
 
-    // Bulk-upsert contacts
-    await db.contacts.bulkPut(contactRecords);
-    console.log(`[Sync] Stored ${contactRecords.length} contacts`);
+    // Replace the whole table so contacts deleted on the phone disappear here too
+    await db.transaction('rw', db.contacts, async () => {
+      if (!withAvatars) {
+        const existing = await db.contacts.bulkGet(contactRecords.map((c) => c.id));
+        contactRecords.forEach((c, i) => {
+          c.avatar = existing[i]?.avatar ?? null;
+        });
+      }
+      await db.contacts.clear();
+      await db.contacts.bulkPut(contactRecords);
+    });
+    if (withAvatars) await db.setMeta(PHOTOS_SYNCED_KEY, Date.now());
 
     // Build a lookup: normalized address → contact ID
     const addressToContactId = new Map<string, string>();
@@ -504,7 +518,6 @@ export async function syncContacts() {
 
     // Link handles to contacts
     const allHandles = await db.handles.toArray();
-    let linked = 0;
     for (const handle of allHandles) {
       const normalizedAddr = normalizePhone(handle.address);
       const contactId =
@@ -514,11 +527,9 @@ export async function syncContacts() {
 
       if (contactId && contactId !== handle.contactId) {
         await db.handles.update(handle.address, { contactId });
-        linked++;
       }
     }
 
-    console.log(`[Sync] Linked ${linked} handles to contacts`);
   } catch (err) {
     console.error('[Sync] Contact sync failed:', err);
   }

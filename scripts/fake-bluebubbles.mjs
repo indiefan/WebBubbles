@@ -157,11 +157,41 @@ function seed() {
 
 seed();
 
+/**
+ * An uncompressed BMP: a gradient that reads as a photo, or (flat) one solid
+ * colour like the letter tiles some contact sources generate.
+ */
+function bitmap(size, hue, flat = false) {
+  const rowBytes = Math.ceil((size * 3) / 4) * 4;
+  const buf = Buffer.alloc(54 + rowBytes * size);
+  buf.write('BM');
+  buf.writeUInt32LE(buf.length, 2);
+  buf.writeUInt32LE(54, 10);
+  buf.writeUInt32LE(40, 14);
+  buf.writeInt32LE(size, 18);
+  buf.writeInt32LE(size, 22);
+  buf.writeUInt16LE(1, 26);
+  buf.writeUInt16LE(24, 28);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = 54 + y * rowBytes + x * 3;
+      buf[i] = flat ? hue : (x * 255) / size; // blue
+      buf[i + 1] = flat ? 90 : (y * 255) / size; // green
+      buf[i + 2] = flat ? 200 : (hue + x + y) % 256; // red
+    }
+  }
+  return buf;
+}
+
+// One person appears in both sources, as on a real server: the Mac's Contacts
+// ("api") and the server's own list ("db"), which also holds generated tiles
 const CONTACTS = [
-  { id: 'c1', displayName: 'Ana Rivera', phoneNumbers: [{ address: '+1 (555) 501-00' }, { address: '+15550100' }], emails: [] },
-  { id: 'c2', displayName: 'Ben Okafor', phoneNumbers: [{ address: '+15550101' }], emails: [] },
-  { id: 'c3', displayName: 'Chloe Park', phoneNumbers: [{ address: '+15550102' }], emails: [] },
+  { id: 'A1B2', sourceType: 'api', displayName: 'Ana Rivera', phoneNumbers: [{ address: '+1 (555) 501-00' }, { address: '+15550100' }], emails: [], avatar: bitmap(96, 40) },
+  { id: 1, sourceType: 'db', displayName: 'Ana Rivera', phoneNumbers: [{ address: '+15550100' }], emails: [], avatar: bitmap(32, 40) },
+  { id: 2, sourceType: 'db', displayName: 'Ben Okafor', phoneNumbers: [{ address: '+15550101' }], emails: [], avatar: bitmap(48, 120, true) },
+  { id: 3, sourceType: 'db', displayName: 'Chloe Park', phoneNumbers: [{ address: '+15550102' }], emails: [], avatar: bitmap(64, 200) },
 ];
+const GROUPS_WITH_PHOTO = new Set(['iMessage;+;chat900']);
 
 // ─── Helpers ───────────────────────────────────────────
 
@@ -269,7 +299,10 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && route === '/server/info') {
     return ok({ server_version: 'fake-1.0.0', private_api: true });
   }
-  if (req.method === 'GET' && route === '/contact') return ok(CONTACTS);
+  if (req.method === 'GET' && route === '/contact') {
+    const withAvatars = (url.searchParams.get('extraProperties') ?? '').includes('avatar');
+    return ok(CONTACTS.map((c) => ({ ...c, avatar: withAvatars ? c.avatar.toString('base64') : '' })));
+  }
 
   if (req.method === 'POST' && route === '/chat/query') {
     const body = await readBody(req);
@@ -311,7 +344,11 @@ const server = http.createServer(async (req, res) => {
       rows.sort((x, y) => y.dateCreated - x.dateCreated);
       return ok(rows.slice(0, limit));
     }
-    if (req.method === 'GET' && chatSub === '/icon') return send(404, { status: 404 });
+    if (req.method === 'GET' && chatSub === '/icon') {
+      if (!GROUPS_WITH_PHOTO.has(chatGuid)) return send(404, { status: 404 });
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+      return res.end(bitmap(96, 170));
+    }
     if (req.method === 'POST' && chatSub === '/read') {
       io.emit('chat-read-status-changed', { chatGuid, read: true });
       return ok(null);

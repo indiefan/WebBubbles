@@ -29,6 +29,9 @@ export interface ChatRecord {
   historyComplete?: boolean;
   /** When this client last showed the chat to the user. */
   lastReadAt?: number | null;
+  /** When the server was last asked whether this group has a photo, and what it said. */
+  iconCheckedAt?: number | null;
+  hasIcon?: boolean;
 }
 
 export interface MessageRecord {
@@ -100,6 +103,8 @@ export interface ContactRecord {
   emails: string[];
   structuredName: object | null;
   avatarHash: string | null;
+  /** The contact's photo as a data URL, when they have a real one. */
+  avatar?: string | null;
 }
 
 export interface DraftRecord {

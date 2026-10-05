@@ -13,6 +13,8 @@ interface ContactState {
   handles: Map<string, HandleRecord>;
   /** Normalized phone/email → contact ID, for addresses we hold no handle for */
   addressIndex: Map<string, string>;
+  /** Normalized phone/email → photo (data URL), for contacts that have one */
+  avatarIndex: Map<string, string>;
   /** Whether contacts have been loaded */
   loaded: boolean;
 
@@ -32,6 +34,9 @@ interface ContactState {
    * - Group chats without displayName → join resolved participant names
    */
   resolveChatDisplayName: (chat: ChatRecord) => string;
+
+  /** The photo for a handle address, or null when the contact has none. */
+  resolveAvatar: (handleAddress: string | null) => string | null;
 }
 
 /**
@@ -55,12 +60,15 @@ function phoneKeys(phone: string): string[] {
 }
 
 function lookupAddress(index: Map<string, string>, address: string): string | undefined {
-  const exact = index.get(address.toLowerCase());
-  if (exact) return exact;
-  if (address.includes('@')) return undefined;
+  const exact = address.toLowerCase();
+  if (address.includes('@')) return index.get(exact);
+  // Phone numbers are matched by their digits first, so every way of writing
+  // the same number lands on the same entry
   const digits = normalizePhone(address);
-  if (!digits) return undefined;
-  return index.get(digits) ?? (digits.length >= 10 ? index.get(digits.slice(-10)) : undefined);
+  return (
+    (digits ? index.get(digits) ?? (digits.length >= 10 ? index.get(digits.slice(-10)) : undefined) : undefined) ??
+    index.get(exact)
+  );
 }
 
 export const useContactStore = create<ContactState>((set, get) => ({
@@ -68,6 +76,7 @@ export const useContactStore = create<ContactState>((set, get) => ({
   handleContactMap: new Map(),
   handles: new Map(),
   addressIndex: new Map(),
+  avatarIndex: new Map(),
   loaded: false,
 
   loadContacts: async () => {
@@ -76,15 +85,16 @@ export const useContactStore = create<ContactState>((set, get) => ({
 
       const contactsMap = new Map<string, ContactRecord>();
       const addressIndex = new Map<string, string>();
+      const avatarIndex = new Map<string, string>();
       for (const contact of allContacts) {
         contactsMap.set(contact.id, contact);
-        for (const phone of contact.phones) {
-          for (const key of phoneKeys(phone)) {
-            if (!addressIndex.has(key)) addressIndex.set(key, contact.id);
+        const keys = [...contact.phones.flatMap(phoneKeys), ...contact.emails.map((e) => e.toLowerCase())];
+        for (const key of keys) {
+          if (!addressIndex.has(key)) addressIndex.set(key, contact.id);
+          // The same person can be listed twice; keep the more detailed photo
+          if (contact.avatar && contact.avatar.length > (avatarIndex.get(key)?.length ?? 0)) {
+            avatarIndex.set(key, contact.avatar);
           }
-        }
-        for (const email of contact.emails) {
-          addressIndex.set(email.toLowerCase(), contact.id);
         }
       }
 
@@ -98,7 +108,7 @@ export const useContactStore = create<ContactState>((set, get) => ({
         if (contactId) handleContactMap.set(handle.address, contactId);
       }
 
-      set({ contacts: contactsMap, handles: handlesMap, handleContactMap, addressIndex, loaded: true });
+      set({ contacts: contactsMap, handles: handlesMap, handleContactMap, addressIndex, avatarIndex, loaded: true });
     } catch (err) {
       console.error('[ContactStore] Failed to load contacts:', err);
     }
@@ -122,6 +132,11 @@ export const useContactStore = create<ContactState>((set, get) => ({
 
     // 3. Fall back to raw address
     return handleAddress;
+  },
+
+  resolveAvatar: (handleAddress) => {
+    if (!handleAddress) return null;
+    return lookupAddress(get().avatarIndex, handleAddress) ?? null;
   },
 
   resolveChatDisplayName: (chat) => {

@@ -15,6 +15,7 @@ import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationDetails } from "@/components/chat/ConversationDetails";
 import { chatIconCache } from "@/services/chatIconCache";
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
+import { Avatar } from "@/components/Avatar";
 
 /** Within this distance of the newest message the view follows new arrivals. */
 const STICK_TO_BOTTOM_PX = 150;
@@ -43,7 +44,8 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   // Subscribing to the contact maps re-renders names once contacts finish loading
   const contacts = useContactStore((s) => s.contacts);
   const handles = useContactStore((s) => s.handles);
-  const { resolveChatDisplayName, resolveDisplayName } = useContactStore.getState();
+  const avatarIndex = useContactStore((s) => s.avatarIndex);
+  const { resolveChatDisplayName, resolveDisplayName, resolveAvatar } = useContactStore.getState();
 
   const listRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
@@ -51,7 +53,8 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   const [chatIconUrl, setChatIconUrl] = useState<string | null>(null);
 
   const chatTitle = chat ? resolveChatDisplayName(chat) : guid;
-  const isGroupChat = !!chat && (chat.participantHandleAddresses?.length ?? 0) > 1;
+  const participants = chat?.participantHandleAddresses ?? [];
+  const isGroupChat = participants.length > 1;
 
   // ─── Loading ─────────────────────────────────────────
 
@@ -103,7 +106,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
   }, [guid, hydrated, newestIncomingGuid]);
 
   // Load chat icon
-  const hasCustomIcon = !!chat?.customAvatarPath;
+  const hasCustomIcon = !!(chat?.hasIcon || chat?.customAvatarPath);
   useEffect(() => {
     setChatIconUrl(null);
     if (hasCustomIcon) {
@@ -174,8 +177,22 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
 
     // Reactions appear as badges on the message they target, not as rows
     const visible = [...messages, ...pending].filter((m) => !isReaction(m));
-    for (const msg of visible) {
-      const msgDate = formatDateSeparator(msg.dateCreated);
+    // Consecutive messages from one person form a run: the name goes on the
+    // first and the face on the last, as in Messages
+    const days = visible.map((m) => formatDateSeparator(m.dateCreated));
+    const sameRun = (a: number, b: number) =>
+      a >= 0 &&
+      b < visible.length &&
+      !visible[a].isFromMe &&
+      !visible[b].isFromMe &&
+      !visible[a].itemType &&
+      !visible[b].itemType &&
+      visible[a].handleAddress === visible[b].handleAddress &&
+      days[a] === days[b];
+
+    for (let i = 0; i < visible.length; i++) {
+      const msg = visible[i];
+      const msgDate = days[i];
       if (msgDate !== lastDate) {
         elements.push(
           <div key={`date-${msgDate}`} className="message-date-separator">
@@ -192,6 +209,9 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
           msg={msg}
           chatGuid={guid}
           senderName={isGroupChat && !msg.isFromMe && msg.handleAddress ? resolveDisplayName(msg.handleAddress) : null}
+          showSenderName={!sameRun(i - 1, i)}
+          senderAvatar={isGroupChat && !msg.isFromMe ? resolveAvatar(msg.handleAddress) : undefined}
+          hideFace={sameRun(i, i + 1)}
           reactions={reactionIndex.get(msg.guid)}
           replyTo={replyGuid ? byGuid.get(replyGuid) : undefined}
         />,
@@ -200,7 +220,7 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
     return elements;
     // contacts/handles are listed so sender names refresh when they load
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, pending, guid, isGroupChat, reactionIndex, byGuid, contacts, handles]);
+  }, [messages, pending, guid, isGroupChat, reactionIndex, byGuid, contacts, handles, avatarIndex]);
 
   const isEmpty = messages.length === 0 && pending.length === 0;
 
@@ -209,9 +229,16 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}>
         <div className="chat-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div className="avatar" style={{ width: 32, height: 32, fontSize: 13 }}>
-              {chatIconUrl ? <img src={chatIconUrl} alt="" /> : (chatTitle.charAt(0).toUpperCase() || "#")}
-            </div>
+            <Avatar
+              name={chatTitle}
+              imageUrl={chatIconUrl ?? (participants.length === 1 ? resolveAvatar(participants[0]) : null)}
+              members={
+                isGroupChat
+                  ? participants.slice(0, 2).map((addr) => ({ name: resolveDisplayName(addr), imageUrl: resolveAvatar(addr) }))
+                  : undefined
+              }
+              size={32}
+            />
             <h3 style={{ fontSize: 16, fontWeight: 600 }}>{chatTitle}</h3>
           </div>
           <button

@@ -10,12 +10,22 @@ import { NO_REACTIONS, ReactionGroup } from "@/services/reactions";
 import { MessageAttachmentGroup } from "./MessageAttachment";
 import { ReactionPicker } from "./ReactionPicker";
 import { ReplyPreview } from "./ReplyPreview";
+import { Avatar } from "@/components/Avatar";
 
 interface MessageBubbleProps {
   msg: MessageRecord;
   chatGuid: string;
-  /** Name shown above an incoming bubble in a group chat. */
+  /** Who sent an incoming message in a group chat. */
   senderName?: string | null;
+  /** Show the name above the bubble (the first of a run of messages from one person). */
+  showSenderName?: boolean;
+  /**
+   * Group chats show the sender's face beside incoming bubbles: pass their
+   * photo, or null to show their initial. Leave undefined for no face at all.
+   */
+  senderAvatar?: string | null;
+  /** Keep the face's space but leave it empty (all but the last of a run). */
+  hideFace?: boolean;
   reactions?: ReactionGroup[];
   /** The message this one replies to, when it is loaded. */
   replyTo?: MessageRecord;
@@ -89,7 +99,16 @@ function MessageText({ text }: { text: string }) {
   );
 }
 
-function MessageBubbleImpl({ msg, chatGuid, senderName, reactions = NO_REACTIONS, replyTo }: MessageBubbleProps) {
+function MessageBubbleImpl({
+  msg,
+  chatGuid,
+  senderName,
+  showSenderName = true,
+  senderAvatar,
+  hideFace = false,
+  reactions = NO_REACTIONS,
+  replyTo,
+}: MessageBubbleProps) {
   const [showPicker, setShowPicker] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(msg.text || "");
@@ -184,8 +203,16 @@ function MessageBubbleImpl({ msg, chatGuid, senderName, reactions = NO_REACTIONS
   const hasAttachments = (msg.attachments?.length ?? 0) > 0;
   const status = getDeliveryStatus(msg);
 
+  const showFace = senderAvatar !== undefined && !msg.isFromMe;
+
   return (
-    <div className="message-row">
+    <div className={`message-row ${showFace ? "with-avatar" : ""}`}>
+      {showFace && (
+        <div className="message-row-avatar">
+          {!hideFace && <Avatar name={senderName ?? ""} imageUrl={senderAvatar} size={28} />}
+        </div>
+      )}
+      <div className="message-row-body">
       <div
         className={`message-bubble ${msg.isFromMe ? "sent" : "received"} ${isUnsent ? "message-unsent" : ""}`}
         style={{ opacity: isTemp && !hasError ? 0.6 : 1, position: "relative" }}
@@ -197,7 +224,7 @@ function MessageBubbleImpl({ msg, chatGuid, senderName, reactions = NO_REACTIONS
           <ReplyPreview threadOriginatorGuid={msg.threadOriginatorGuid} variant="bubble" message={replyTo} />
         )}
 
-        {senderName && !msg.isFromMe && <div className="message-sender">{senderName}</div>}
+        {senderName && showSenderName && !msg.isFromMe && <div className="message-sender">{senderName}</div>}
 
         {/* Message content: unsent, editing, or normal */}
         {isUnsent ? (
@@ -314,6 +341,7 @@ function MessageBubbleImpl({ msg, chatGuid, senderName, reactions = NO_REACTIONS
             </button>
           </>
         )}
+      </div>
       </div>
     </div>
   );
