@@ -14,11 +14,15 @@
 //   POST /__control/status        { guid?, delivered?, read? }   mark an outgoing message
 //   POST /__control/drop-sockets  disconnect every client
 //   POST /__control/latency       { ms }                         delay every API response
+//   POST /__control/helper        { connected }                  connect or drop the Private API helper
+//   POST /__control/alert         { type?, message }             add a server alert
+//   POST /__control/update        { version | null }             offer (or stop offering) a server update
 
 import http from 'node:http';
 import { Server as SocketServer } from 'socket.io';
 
 const PORT = Number(process.env.FAKE_BB_PORT ?? 4010);
+const SERVER_VERSION_START = '1.9.9';
 const PASSWORD = process.env.FAKE_BB_PASSWORD ?? 'fake';
 let latencyMs = Number(process.env.FAKE_BB_LATENCY_MS ?? 120);
 
@@ -157,6 +161,34 @@ function seed() {
 
 seed();
 
+// ─── Server state ──────────────────────────────────────
+
+const serverState = {
+  version: SERVER_VERSION_START,
+  helperConnected: true,
+  updateVersion: null,
+  /** While restarting, the server answers nothing. */
+  downUntil: 0,
+};
+let nextAlertId = 1;
+const alerts = [];
+function addAlert(type, message, ageMs = 0) {
+  alerts.unshift({ id: nextAlertId++, type, value: message, isRead: false, created: new Date(Date.now() - ageMs).toISOString() });
+}
+addAlert('error', '[UpdateService] Failed to fetch release information from GitHub! Error: getaddrinfo ENOTFOUND api.github.com', 30 * 86400_000);
+addAlert('warn', 'Command failed: /usr/bin/sips --setProperty "format" "jpeg" "/Users/fake/Library/Messages/Attachments/22/02/IMG_1234.HEIC"', 3 * 86400_000);
+addAlert('info', 'Private API Helper connected', 3600_000);
+
+/** Simulate a restart: drop every connection and answer nothing for `ms`. */
+function goDown(ms) {
+  setTimeout(() => {
+    serverState.downUntil = Date.now() + ms;
+    io.disconnectSockets(true);
+  }, 1000);
+}
+
+const isDown = () => Date.now() < serverState.downUntil;
+
 /**
  * An uncompressed BMP: a gradient that reads as a photo, or (flat) one solid
  * colour like the letter tiles some contact sources generate.
@@ -254,6 +286,18 @@ const server = http.createServer(async (req, res) => {
   // ── Test controls
   if (path.startsWith('/__control/')) {
     const body = await readBody(req);
+    if (path === '/__control/helper') {
+      serverState.helperConnected = !!body.connected;
+      return ok(serverState.helperConnected);
+    }
+    if (path === '/__control/alert') {
+      addAlert(body.type ?? 'error', body.message ?? 'Something went wrong');
+      return ok(alerts[0].id);
+    }
+    if (path === '/__control/update') {
+      serverState.updateVersion = body.version ?? null;
+      return ok(serverState.updateVersion);
+    }
     if (path === '/__control/incoming') {
       const chatGuid = body.chatGuid ?? 'iMessage;-;+15550100';
       const created = [];
@@ -285,6 +329,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (!path.startsWith('/api/v1/')) return send(404, { status: 404, message: 'Not found' });
+  // Mid-restart: nobody home
+  if (isDown()) return req.socket.destroy();
   if (url.searchParams.get('guid') !== PASSWORD) {
     return send(401, { status: 401, message: 'You are not authorized to access this resource' });
   }
@@ -297,7 +343,67 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && route === '/ping') return ok('pong');
   if (req.method === 'GET' && route === '/server/info') {
-    return ok({ server_version: 'fake-1.0.0', private_api: true });
+    return ok({
+      computer_id: 'fake@fake-mac',
+      os_version: '26.0.1',
+      server_version: serverState.version,
+      private_api: true,
+      helper_connected: serverState.helperConnected,
+      proxy_service: 'Dynamic DNS',
+    });
+  }
+  if (req.method === 'GET' && route === '/server/alert') return ok(alerts.slice(0, 10));
+  if (req.method === 'POST' && route === '/server/alert/read') {
+    const body = await readBody(req);
+    if (!body.ids?.length) return send(400, { status: 400, message: 'No alert IDs provided!' });
+    for (const alert of alerts) if (body.ids.includes(alert.id)) alert.isRead = true;
+    return ok(null);
+  }
+  if (req.method === 'GET' && route === '/server/update/check') {
+    const available = !!serverState.updateVersion;
+    return ok({
+      available,
+      current: serverState.version,
+      metadata: available ? { version: serverState.updateVersion, release_name: `v${serverState.updateVersion}` } : null,
+    });
+  }
+  if (req.method === 'POST' && route === '/server/update/install') {
+    if (!serverState.updateVersion) {
+      return send(400, { status: 400, message: 'No update available!', error: { type: 'Bad Request', message: 'No update available!' } });
+    }
+    // Download, then install and relaunch on the new version
+    const next = serverState.updateVersion;
+    setTimeout(() => {
+      goDown(6000);
+      setTimeout(() => {
+        serverState.version = next;
+        serverState.updateVersion = null;
+      }, 3000);
+    }, 3000);
+    return ok(null, { message: 'Update has started downloading!' });
+  }
+  if (req.method === 'POST' && route === '/mac/imessage/restart') {
+    // Messages takes a few seconds to come back, and the helper a little longer
+    serverState.helperConnected = false;
+    await sleep(3000);
+    setTimeout(() => {
+      serverState.helperConnected = true;
+    }, 2000);
+    return ok(null, { message: 'Successfully restart the Messages App!' });
+  }
+  if (req.method === 'GET' && route === '/server/restart/soft') {
+    goDown(5000);
+    setTimeout(() => {
+      serverState.helperConnected = true;
+    }, 5500);
+    return ok(null, { message: 'Successfully kicked off services restart!' });
+  }
+  if (req.method === 'GET' && route === '/server/restart/hard') {
+    goDown(12000);
+    setTimeout(() => {
+      serverState.helperConnected = true;
+    }, 12500);
+    return ok(null, { message: 'Successfully kicked off re-launch process!' });
   }
   if (req.method === 'GET' && route === '/contact') {
     const withAvatars = (url.searchParams.get('extraProperties') ?? '').includes('avatar');
@@ -366,6 +472,9 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'POST' && route === '/message/text') {
     const body = await readBody(req);
+    if (!serverState.helperConnected) {
+      return send(500, { status: 500, message: 'Message Send Error', error: { type: 'iMessage Error', message: 'iMessage Private API Helper is not connected!' } });
+    }
     if (!chats.has(body.chatGuid)) return send(404, { status: 404, message: 'Chat does not exist!' });
     clock = Math.max(clock + 1000, Date.now());
     const msg = addMessage(body.chatGuid, {
@@ -428,7 +537,8 @@ const server = http.createServer(async (req, res) => {
 
 const io = new SocketServer(server, { cors: { origin: '*' } });
 io.use((socket, next) => {
-  if (socket.handshake.query.guid === PASSWORD) next();
+  if (isDown()) next(new Error('Server restarting'));
+  else if (socket.handshake.query.guid === PASSWORD) next();
   else next(new Error('Unauthorized'));
 });
 io.on('connection', (socket) => {

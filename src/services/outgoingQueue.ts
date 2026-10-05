@@ -7,6 +7,7 @@ import { useMessageStore } from '@/stores/messageStore';
 import { useChatStore } from '@/stores/chatStore';
 import { http } from './http';
 import { ingestMessages } from './ingest';
+import { refreshServerStatus } from './serverStatus';
 
 export interface QueueItem {
   chatGuid: string;
@@ -186,6 +187,8 @@ class OutgoingQueue {
       if (!this.confirmed.has(unit.tempGuid)) {
         console.error('[OutgoingQueue] Send failed:', err);
         useMessageStore.getState().updateMessage(unit.chatGuid, unit.tempGuid, { error: 1 });
+        // A failed send is often the server's fault; make sure the status shows it
+        void refreshServerStatus();
       }
     } finally {
       this.confirmed.delete(unit.tempGuid);

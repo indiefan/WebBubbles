@@ -20,6 +20,9 @@ import { chatIconCache } from "@/services/chatIconCache";
 import { DEV_READ_ONLY } from "@/services/devSession";
 import { useAppUpdate } from "@/services/appUpdate";
 import { Avatar, AvatarPerson } from "@/components/Avatar";
+import { ServerBanner, ServerPanel } from "@/components/ServerPanel";
+import { startServerMonitor, stopServerMonitor } from "@/services/serverStatus";
+import { deriveHealth, useServerStatusStore } from "@/stores/serverStatusStore";
 
 const CHAT_ROW_HEIGHT = 72;
 const NO_FACE: ChatFace = { name: "", imageUrl: null };
@@ -110,6 +113,11 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const [searchQuery, setSearchQuery] = useState("");
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showServer, setShowServer] = useState(false);
+  const serverInfo = useServerStatusStore((s) => s.info);
+  const serverUnreachable = useServerStatusStore((s) => s.unreachable);
+  const serverAction = useServerStatusStore((s) => s.action);
+  const health = deriveHealth({ socketState, info: serverInfo, unreachable: serverUnreachable, action: serverAction });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
   const [chatIconUrls, setChatIconUrls] = useState<Record<string, string>>({});
   // Re-rendered once a minute so relative times ("5 minutes") stay current
@@ -145,6 +153,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
       }
 
       const firstSync = startSync();
+      startServerMonitor();
       if (!haveLocalChats) {
         await firstSync;
         if (!cancelled) setLoading(false);
@@ -263,6 +272,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
   const handleLogout = async () => {
     stopSync();
+    stopServerMonitor();
     socketService.disconnect();
     useConnectionStore.getState().clear();
     useSyncStore.getState().setLastFullSync(null);
@@ -308,21 +318,15 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
             )}
           </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* Connection indicator */}
-            <div
-              style={{
-                width: 8,
-                height: 8,
-                borderRadius: "50%",
-                background:
-                  socketState === "connected"
-                    ? "var(--success)"
-                    : socketState === "connecting"
-                    ? "orange"
-                    : "var(--danger)",
-              }}
-              title={`Socket: ${socketState}`}
-            />
+            {/* Server status: opens the status panel */}
+            <button
+              className="server-indicator"
+              onClick={() => setShowServer(true)}
+              title={`${health.summary} — server status`}
+              aria-label={`Server status: ${health.summary}`}
+            >
+              <span className={`status-dot status-dot-${health.level}`} />
+            </button>
             {/* Logout button */}
             <button
               onClick={handleLogout}
@@ -386,6 +390,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
             </button>
           </div>
         </div>
+
+        <ServerBanner onOpen={() => setShowServer(true)} />
 
         <div className="search-bar">
           <input
@@ -474,6 +480,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
       {showNewChat && <NewChatModal onClose={() => setShowNewChat(false)} />}
       {showSearch && <SearchPanel onClose={() => setShowSearch(false)} />}
+      {showServer && <ServerPanel onClose={() => setShowServer(false)} />}
 
       {/* Context menu overlay */}
       {contextMenu && (

@@ -28,8 +28,11 @@ export async function fetchDevSession(): Promise<DevSession | null> {
   }
 }
 
+// The few GETs in the BlueBubbles API that do something
+const ACTION_GETS = [/^\/server\/restart\//];
+
 /** Queries are POSTs in the BlueBubbles API; everything else that isn't a GET changes state. */
 export function isWriteRequest(method: string, path: string): boolean {
-  if (method === 'GET') return false;
+  if (method === 'GET') return ACTION_GETS.some((pattern) => pattern.test(path));
   return !(method === 'POST' && path.endsWith('/query'));
 }

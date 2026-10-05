@@ -100,8 +100,8 @@ export class HttpService {
   }
 
   // ─── Server ──────────────────────────────────────────
-  ping(signal?: AbortSignal) {
-    return this.request('GET', '/ping', { signal });
+  ping(opts: { signal?: AbortSignal; timeoutMs?: number } = {}) {
+    return this.request('GET', '/ping', opts);
   }
 
   serverInfo(signal?: AbortSignal) {
@@ -110,6 +110,40 @@ export class HttpService {
 
   serverStatTotals() {
     return this.request('GET', '/server/statistics/totals');
+  }
+
+  /** The newest server alerts (the server returns at most 10). */
+  serverAlerts() {
+    return this.request('GET', '/server/alert');
+  }
+
+  markAlertsRead(ids: number[]) {
+    return this.request('POST', '/server/alert/read', { body: { ids } });
+  }
+
+  /** Asks GitHub for a newer server release, so it can be slow or fail offline. */
+  checkForServerUpdate() {
+    return this.request('GET', '/server/update/check', { timeoutMs: 20_000 });
+  }
+
+  /** Starts downloading the update; the server installs it and relaunches itself. */
+  installServerUpdate() {
+    return this.request('POST', '/server/update/install');
+  }
+
+  /** Restart Messages on the Mac (and the Private API helper inside it). Returns once it's back. */
+  restartMessagesApp() {
+    return this.request('POST', '/mac/imessage/restart', { timeoutMs: 90_000 });
+  }
+
+  /** Reconnect to the message database and restart the server's services. Returns before the restart begins. */
+  restartServerServices() {
+    return this.request('GET', '/server/restart/soft');
+  }
+
+  /** Quit and reopen the server app. Returns before the relaunch begins. */
+  relaunchServer() {
+    return this.request('GET', '/server/restart/hard');
   }
 
   // ─── Chats ───────────────────────────────────────────
