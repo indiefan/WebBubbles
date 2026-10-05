@@ -11,6 +11,8 @@ interface ContactState {
   handleContactMap: Map<string, string>;
   /** Handle address → HandleRecord lookup */
   handles: Map<string, HandleRecord>;
+  /** Normalized phone/email → contact ID, for addresses we hold no handle for */
+  addressIndex: Map<string, string>;
   /** Whether contacts have been loaded */
   loaded: boolean;
 
@@ -39,61 +41,64 @@ function normalizePhone(phone: string): string {
   return phone.replace(/[^\d]/g, '');
 }
 
+/**
+ * The forms a phone number is indexed under: as written, digits only, and its
+ * last ten digits (so "+1 234 567 8901" matches a contact saved without the
+ * country code).
+ */
+function phoneKeys(phone: string): string[] {
+  const digits = normalizePhone(phone);
+  const keys = [phone.toLowerCase()];
+  if (digits) keys.push(digits);
+  if (digits.length > 10) keys.push(digits.slice(-10));
+  return keys;
+}
+
+function lookupAddress(index: Map<string, string>, address: string): string | undefined {
+  const exact = index.get(address.toLowerCase());
+  if (exact) return exact;
+  if (address.includes('@')) return undefined;
+  const digits = normalizePhone(address);
+  if (!digits) return undefined;
+  return index.get(digits) ?? (digits.length >= 10 ? index.get(digits.slice(-10)) : undefined);
+}
+
 export const useContactStore = create<ContactState>((set, get) => ({
   contacts: new Map(),
   handleContactMap: new Map(),
   handles: new Map(),
+  addressIndex: new Map(),
   loaded: false,
 
   loadContacts: async () => {
     try {
-      // Load all contacts
-      const allContacts = await db.contacts.toArray();
+      const [allContacts, allHandles] = await Promise.all([db.contacts.toArray(), db.handles.toArray()]);
+
       const contactsMap = new Map<string, ContactRecord>();
-      for (const c of allContacts) {
-        contactsMap.set(c.id, c);
-      }
-
-      // Load all handles
-      const allHandles = await db.handles.toArray();
-      const handlesMap = new Map<string, HandleRecord>();
-      const handleContactMap = new Map<string, string>();
-
-      for (const h of allHandles) {
-        handlesMap.set(h.address, h);
-        if (h.contactId) {
-          handleContactMap.set(h.address, h.contactId);
-        }
-      }
-
-      // Also build reverse lookup from contact phones/emails → contact ID
-      // so we can resolve handles that weren't linked during sync
+      const addressIndex = new Map<string, string>();
       for (const contact of allContacts) {
+        contactsMap.set(contact.id, contact);
         for (const phone of contact.phones) {
-          // Check if any handle address matches this phone (normalized)
-          const normalized = normalizePhone(phone);
-          for (const handle of allHandles) {
-            const handleNorm = normalizePhone(handle.address);
-            if (handleNorm === normalized || handle.address.toLowerCase() === phone.toLowerCase()) {
-              if (!handleContactMap.has(handle.address)) {
-                handleContactMap.set(handle.address, contact.id);
-              }
-            }
+          for (const key of phoneKeys(phone)) {
+            if (!addressIndex.has(key)) addressIndex.set(key, contact.id);
           }
         }
         for (const email of contact.emails) {
-          for (const handle of allHandles) {
-            if (handle.address.toLowerCase() === email.toLowerCase()) {
-              if (!handleContactMap.has(handle.address)) {
-                handleContactMap.set(handle.address, contact.id);
-              }
-            }
-          }
+          addressIndex.set(email.toLowerCase(), contact.id);
         }
       }
 
-      set({ contacts: contactsMap, handles: handlesMap, handleContactMap, loaded: true });
-      console.log(`[ContactStore] Loaded ${contactsMap.size} contacts, ${handlesMap.size} handles, ${handleContactMap.size} mappings`);
+      const handlesMap = new Map<string, HandleRecord>();
+      const handleContactMap = new Map<string, string>();
+      for (const handle of allHandles) {
+        handlesMap.set(handle.address, handle);
+        const contactId =
+          (handle.contactId && contactsMap.has(handle.contactId) ? handle.contactId : undefined) ??
+          lookupAddress(addressIndex, handle.address);
+        if (contactId) handleContactMap.set(handle.address, contactId);
+      }
+
+      set({ contacts: contactsMap, handles: handlesMap, handleContactMap, addressIndex, loaded: true });
     } catch (err) {
       console.error('[ContactStore] Failed to load contacts:', err);
     }
@@ -102,10 +107,10 @@ export const useContactStore = create<ContactState>((set, get) => ({
   resolveDisplayName: (handleAddress) => {
     if (!handleAddress) return 'Unknown';
 
-    const { contacts, handleContactMap, handles } = get();
+    const { contacts, handleContactMap, handles, addressIndex } = get();
 
     // 1. Try to find a linked contact
-    const contactId = handleContactMap.get(handleAddress);
+    const contactId = handleContactMap.get(handleAddress) ?? lookupAddress(addressIndex, handleAddress);
     if (contactId) {
       const contact = contacts.get(contactId);
       if (contact?.displayName) return contact.displayName;

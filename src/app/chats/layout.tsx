@@ -1,34 +1,107 @@
 "use client";
 
-import { useEffect, useCallback, useState } from "react";
+import { memo, useEffect, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useConnectionStore } from "@/stores/connectionStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useSyncStore } from "@/stores/syncStore";
 import { useContactStore } from "@/stores/contactStore";
+import { useMessageStore } from "@/stores/messageStore";
 import { http } from "@/services/http";
 import { socketService } from "@/services/socket";
 import { registerActionHandlers } from "@/services/actionHandler";
-import { db } from "@/lib/db";
+import { ChatRecord, db } from "@/lib/db";
 import { formatDistanceToNow } from "date-fns";
 import { NewChatModal } from "@/components/chat/NewChatModal";
 import { SearchPanel } from "@/components/search/SearchPanel";
-import { syncContacts } from "@/services/sync";
+import { startSync, stopSync } from "@/services/sync";
 import { chatIconCache } from "@/services/chatIconCache";
 import { DEV_READ_ONLY } from "@/services/devSession";
+import { useAppUpdate } from "@/services/appUpdate";
+
+const CHAT_ROW_HEIGHT = 72;
+
+function formatTime(ts: number | null) {
+  if (!ts) return "";
+  try {
+    return formatDistanceToNow(new Date(ts), { addSuffix: false });
+  } catch {
+    return "";
+  }
+}
+
+function getInitials(resolvedName: string) {
+  const firstChar = resolvedName.charAt(0);
+  return /[a-zA-Z]/.test(firstChar) ? firstChar.toUpperCase() : "#";
+}
+
+interface ChatRowProps {
+  chat: ChatRecord;
+  name: string;
+  active: boolean;
+  iconUrl?: string;
+  onOpen: (chatGuid: string) => void;
+  onContextMenu: (e: React.MouseEvent, chatGuid: string) => void;
+}
+
+const ChatRow = memo(function ChatRow({ chat, name, active, iconUrl, onOpen, onContextMenu }: ChatRowProps) {
+  return (
+    <div
+      className={`chat-list-item ${active ? "active" : ""}`}
+      onClick={() => onOpen(chat.guid)}
+      onContextMenu={(e) => onContextMenu(e, chat.guid)}
+    >
+      <div className="avatar">
+        {iconUrl ? <img src={iconUrl} alt="" /> : getInitials(name)}
+      </div>
+      <div className="chat-info">
+        <div className="chat-title-row">
+          <span className="chat-name">{name}</span>
+          <span className="chat-time">{formatTime(chat.lastMessageDate)}</span>
+        </div>
+        <div className="chat-preview" style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          {chat.hasUnreadMessage && (
+            <span
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: "var(--accent)",
+                flexShrink: 0,
+              }}
+            />
+          )}
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+            {chat.lastMessageText || "Attachment"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 export default function ChatsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { serverAddress, password, socketState, isSetup } = useConnectionStore();
-  const { chats, setChats } = useChatStore();
-  const { resolveChatDisplayName, resolveDisplayName, loaded: contactsLoaded } = useContactStore();
+  const serverAddress = useConnectionStore((s) => s.serverAddress);
+  const password = useConnectionStore((s) => s.password);
+  const socketState = useConnectionStore((s) => s.socketState);
+  const isSetup = useConnectionStore((s) => s.isSetup);
+  const chats = useChatStore((s) => s.chats);
+  // Subscribing to the contact maps re-renders names once contacts finish loading
+  const contacts = useContactStore((s) => s.contacts);
+  const handles = useContactStore((s) => s.handles);
+  const resolveChatDisplayName = useContactStore((s) => s.resolveChatDisplayName);
+  const updateAvailable = useAppUpdate();
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [showNewChat, setShowNewChat] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
   const [chatIconUrls, setChatIconUrls] = useState<Record<string, string>>({});
+  // Re-rendered once a minute so relative times ("5 minutes") stay current
+  const [, setClock] = useState(0);
 
   useEffect(() => {
     if (!isSetup) {
@@ -36,81 +109,137 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
       return;
     }
 
-    // Configure HTTP service
     http.configure(serverAddress, password);
-
-    // Connect socket if not already connected
-    if (!socketService.isConnected) {
+    registerActionHandlers();
+    if (!socketService.isStarted) {
       socketService.connect(serverAddress, password);
-      registerActionHandlers();
     }
 
-    // Load chats from IndexedDB
-    const loadChats = async () => {
+    let cancelled = false;
+    (async () => {
+      // Show what we have locally straight away, then let sync bring it up to date
+      let haveLocalChats = false;
       try {
-        const cached = await db.chats.orderBy("lastMessageDate").reverse().toArray();
-        if (cached.length > 0) {
-          setChats(cached);
-          // Load contacts into memory for display name resolution
-          await useContactStore.getState().loadContacts();
-          // Kick off a background contact sync from server
-          syncContacts().then(() => useContactStore.getState().loadContacts()).catch(() => {});
-        } else if (useSyncStore.getState().lastFullSync) {
-          // Fallback: If localStorage claims we're synced but IndexedDB is empty
-          // (browser cleared storage, or database renamed), we must nuke the flag and force a resync!
-          console.warn("[ChatsLayout] App claims to be synced but zero chats found! Resetting sync state.");
-          useSyncStore.getState().setLastFullSync(null);
-          router.push("/");
+        const cached = await db.chats.toArray();
+        if (cancelled) return;
+        haveLocalChats = cached.length > 0;
+        if (haveLocalChats) {
+          useChatStore.getState().setChats(cached);
+          setLoading(false);
         }
+        await useContactStore.getState().loadContacts();
       } catch (err) {
         console.error("[ChatsLayout] Failed to load cached chats:", err);
-      } finally {
-        setLoading(false);
       }
-    };
 
-    loadChats();
-  }, [isSetup, serverAddress, password, router, setChats]);
+      const firstSync = startSync();
+      if (!haveLocalChats) {
+        await firstSync;
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isSetup, serverAddress, password, router]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setClock((n) => n + 1), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Load chat icons for chats with custom avatars
   useEffect(() => {
-    const chatsWithIcons = chats.filter(c => c.customAvatarPath);
-    for (const chat of chatsWithIcons) {
-      if (!chatIconUrls[chat.guid]) {
-        chatIconCache.getChatIconUrl(chat.guid).then(url => {
-          if (url) setChatIconUrls(prev => ({ ...prev, [chat.guid]: url }));
+    for (const chat of chats) {
+      if (chat.customAvatarPath && !chatIconUrls[chat.guid]) {
+        chatIconCache.getChatIconUrl(chat.guid).then((url) => {
+          if (url) setChatIconUrls((prev) => (prev[chat.guid] === url ? prev : { ...prev, [chat.guid]: url }));
         });
       }
     }
   }, [chats]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filteredChats = searchQuery
-    ? chats.filter(
-        (c) => {
-          const resolved = resolveChatDisplayName(c).toLowerCase();
-          const query = searchQuery.toLowerCase();
-          return resolved.includes(query) ||
-            (c.chatIdentifier || "").toLowerCase().includes(query) ||
-            (c.lastMessageText || "").toLowerCase().includes(query);
-        },
-      )
-    : chats;
+  const names = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const chat of chats) map.set(chat.guid, resolveChatDisplayName(chat));
+    return map;
+    // contacts/handles are listed so names refresh when they load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chats, contacts, handles, resolveChatDisplayName]);
 
-  const formatTime = useCallback((ts: number | null) => {
-    if (!ts) return "";
-    try {
-      return formatDistanceToNow(new Date(ts), { addSuffix: false });
-    } catch {
-      return "";
-    }
+  const filteredChats = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return chats;
+    return chats.filter(
+      (c) =>
+        (names.get(c.guid) ?? "").toLowerCase().includes(query) ||
+        (c.chatIdentifier || "").toLowerCase().includes(query) ||
+        (c.lastMessageText || "").toLowerCase().includes(query),
+    );
+  }, [chats, names, searchQuery]);
+
+  const pinned = useMemo(
+    () => filteredChats.filter((c) => c.isPinned).sort((a, b) => (a.pinIndex ?? 0) - (b.pinIndex ?? 0)),
+    [filteredChats],
+  );
+  const unpinned = useMemo(() => filteredChats.filter((c) => !c.isPinned), [filteredChats]);
+
+  const openChat = useCallback(
+    (chatGuid: string) => {
+      useChatStore.getState().setActiveChatGuid(chatGuid);
+      router.push(`/chats/${encodeURIComponent(chatGuid)}`);
+    },
+    [router],
+  );
+
+  const openContextMenu = useCallback((e: React.MouseEvent, chatGuid: string) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, chatGuid });
   }, []);
 
-  const getInitials = (resolvedName: string) => {
-    if (resolvedName) {
-      const firstChar = resolvedName.charAt(0);
-      if (/[a-zA-Z]/.test(firstChar)) return firstChar.toUpperCase();
-    }
-    return "#";
+  // Only the rows on screen are rendered; the list can hold thousands of chats
+  const listRef = useRef<HTMLDivElement>(null);
+  const rowsRef = useRef<HTMLDivElement>(null);
+  const [rowsOffset, setRowsOffset] = useState(0);
+  useLayoutEffect(() => {
+    setRowsOffset(rowsRef.current?.offsetTop ?? 0);
+  }, [pinned.length, loading]);
+
+  // Rows are a fixed height, so positions depend only on the index. Nothing is
+  // measured or cached per chat, which keeps reordering (a chat jumping to the
+  // top on a new message) from ever showing stale rows.
+  const virtualizer = useVirtualizer({
+    count: unpinned.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => CHAT_ROW_HEIGHT,
+    overscan: 8,
+    scrollMargin: rowsOffset,
+  });
+
+  const activePath = pathname ?? "";
+  const isActive = (chatGuid: string) => activePath === `/chats/${encodeURIComponent(chatGuid)}`;
+
+  const handleLogout = async () => {
+    stopSync();
+    socketService.disconnect();
+    useConnectionStore.getState().clear();
+    useSyncStore.getState().setLastFullSync(null);
+    useSyncStore.getState().reset();
+    useChatStore.getState().setChats([]);
+    useMessageStore.getState().clear();
+    try {
+      await Promise.all([
+        db.chats.clear(),
+        db.messages.clear(),
+        db.handles.clear(),
+        db.contacts.clear(),
+        db.drafts.clear(),
+        db.meta.clear(),
+        typeof caches !== "undefined" ? caches.delete("bb-attachments") : Promise.resolve(),
+      ]);
+    } catch {}
+    router.push("/");
   };
 
   return (
@@ -131,6 +260,11 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
                 read-only
               </span>
             )}
+            {updateAvailable && (
+              <button className="update-pill" onClick={() => window.location.reload()} title="A newer version is ready">
+                Update
+              </button>
+            )}
           </h2>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {/* Connection indicator */}
@@ -150,25 +284,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
             />
             {/* Logout button */}
             <button
-              onClick={async () => {
-                socketService.disconnect();
-                useConnectionStore.getState().clear();
-                useSyncStore.getState().setLastFullSync(null);
-                useSyncStore.getState().reset();
-                useChatStore.getState().setChats([]);
-                try {
-                  await Promise.all([
-                    db.chats.clear(),
-                    db.messages.clear(),
-                    db.handles.clear(),
-                    db.attachments.clear(),
-                    db.contacts.clear(),
-                    db.chatParticipants.clear(),
-                    db.drafts.clear(),
-                  ]);
-                } catch {}
-                router.push("/");
-              }}
+              onClick={handleLogout}
               title="Logout"
               style={{
                 background: "none",
@@ -241,7 +357,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
           />
         </div>
 
-        <div className="chat-list">
+        <div className="chat-list" ref={listRef}>
           {loading ? (
             <div className="empty-state">
               <span className="loading-spinner"></span>
@@ -253,90 +369,57 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
           ) : (
             <>
               {/* Pinned chats horizontal row */}
-              {(() => {
-                const pinned = filteredChats
-                  .filter((c) => c.isPinned)
-                  .sort((a, b) => (a.pinIndex ?? 0) - (b.pinIndex ?? 0));
-                if (pinned.length === 0) return null;
-                return (
-                  <div className="pinned-chats-section">
-                    {pinned.map((chat) => {
-                      const name = resolveChatDisplayName(chat);
-                      return (
-                        <div
-                          key={chat.guid}
-                          className={`pinned-chat-item ${
-                            pathname === `/chats/${encodeURIComponent(chat.guid)}` ? "active" : ""
-                          }`}
-                          onClick={() => {
-                            useChatStore.getState().setActiveChatGuid(chat.guid);
-                            router.push(`/chats/${encodeURIComponent(chat.guid)}`);
-                          }}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            setContextMenu({ x: e.clientX, y: e.clientY, chatGuid: chat.guid });
-                          }}
-                          title={name}
-                        >
-                          <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
-                            {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(name)}
-                          </div>
-                          {chat.hasUnreadMessage && <span className="pinned-unread-dot" />}
-                          <span className="pinned-chat-name">{name.split(" ")[0]}</span>
+              {pinned.length > 0 && (
+                <div className="pinned-chats-section">
+                  {pinned.map((chat) => {
+                    const name = names.get(chat.guid) ?? "";
+                    return (
+                      <div
+                        key={chat.guid}
+                        className={`pinned-chat-item ${isActive(chat.guid) ? "active" : ""}`}
+                        onClick={() => openChat(chat.guid)}
+                        onContextMenu={(e) => openContextMenu(e, chat.guid)}
+                        title={name}
+                      >
+                        <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>
+                          {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(name)}
                         </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
+                        {chat.hasUnreadMessage && <span className="pinned-unread-dot" />}
+                        <span className="pinned-chat-name">{name.split(" ")[0]}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Unpinned chats list */}
-              {filteredChats
-                .filter((c) => !c.isPinned)
-                .map((chat) => (
-                <div
-                  key={chat.guid}
-                  className={`chat-list-item ${
-                    pathname === `/chats/${encodeURIComponent(chat.guid)}` ? "active" : ""
-                  }`}
-                  onClick={() => {
-                    useChatStore.getState().setActiveChatGuid(chat.guid);
-                    router.push(`/chats/${encodeURIComponent(chat.guid)}`);
-                  }}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    setContextMenu({ x: e.clientX, y: e.clientY, chatGuid: chat.guid });
-                  }}
-                >
-                  <div className="avatar">
-                    {chatIconUrls[chat.guid] ? <img src={chatIconUrls[chat.guid]} alt="" /> : getInitials(resolveChatDisplayName(chat))}
-                  </div>
-                  <div className="chat-info">
-                    <div className="chat-title-row">
-                      <span className="chat-name">
-                        {resolveChatDisplayName(chat)}
-                      </span>
-                      <span className="chat-time">{formatTime(chat.lastMessageDate)}</span>
+              <div ref={rowsRef} style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+                {virtualizer.getVirtualItems().map((item) => {
+                  const chat = unpinned[item.index];
+                  return (
+                    <div
+                      key={chat.guid}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        height: CHAT_ROW_HEIGHT,
+                        transform: `translateY(${item.start - virtualizer.options.scrollMargin}px)`,
+                      }}
+                    >
+                      <ChatRow
+                        chat={chat}
+                        name={names.get(chat.guid) ?? ""}
+                        active={isActive(chat.guid)}
+                        iconUrl={chatIconUrls[chat.guid]}
+                        onOpen={openChat}
+                        onContextMenu={openContextMenu}
+                      />
                     </div>
-                    <div className="chat-preview" style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      {chat.hasUnreadMessage && (
-                        <span
-                          style={{
-                            width: 8,
-                            height: 8,
-                            borderRadius: "50%",
-                            background: "var(--accent)",
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
-                        {chat.lastMessageText || "Attachment"}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
+                  );
+                })}
+              </div>
             </>
           )}
         </div>

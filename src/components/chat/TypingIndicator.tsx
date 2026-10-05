@@ -10,7 +10,7 @@ interface TypingIndicatorProps {
 
 export function TypingIndicator({ chatGuid, isGroupChat }: TypingIndicatorProps) {
   const entry = useTypingStore((s) => s.typingByChatGuid[chatGuid]);
-  const { resolveDisplayName } = useContactStore();
+  const resolveDisplayName = useContactStore((s) => s.resolveDisplayName);
 
   if (!entry) return null;
 

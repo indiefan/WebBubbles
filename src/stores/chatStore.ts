@@ -2,10 +2,13 @@ import { create } from 'zustand';
 import { ChatRecord, db } from '@/lib/db';
 
 interface ChatState {
+  /** All chats, most recently active first. */
   chats: ChatRecord[];
   activeChatGuid: string | null;
 
   setChats: (chats: ChatRecord[]) => void;
+  /** Insert or replace chats by guid. Unchanged chats keep their object identity. */
+  upsertChats: (chats: ChatRecord[]) => void;
   upsertChat: (chat: ChatRecord) => void;
   setActiveChatGuid: (guid: string | null) => void;
   updateChatLastMessage: (chatGuid: string, text: string | null, date: number, messageGuid: string) => void;
@@ -14,48 +17,94 @@ interface ChatState {
   togglePin: (chatGuid: string) => void;
 }
 
-export const useChatStore = create<ChatState>((set, get) => ({
+function byRecency(a: ChatRecord, b: ChatRecord): number {
+  return (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0);
+}
+
+function sameChat(a: ChatRecord, b: ChatRecord): boolean {
+  const keys = Object.keys(b) as (keyof ChatRecord)[];
+  for (const key of keys) {
+    const av = a[key];
+    const bv = b[key];
+    if (av === bv) continue;
+    if (Array.isArray(av) && Array.isArray(bv) && av.length === bv.length && av.every((v, i) => v === bv[i])) continue;
+    return false;
+  }
+  return true;
+}
+
+/** Write local-only chat state through to IndexedDB (fire-and-forget). */
+function persist(chatGuid: string, updates: Partial<ChatRecord>) {
+  try {
+    db.chats.update(chatGuid, updates)?.catch?.((err: unknown) => {
+      console.error('[ChatStore] Failed to persist chat state:', err);
+    });
+  } catch {
+    // IndexedDB may not be available in test environment
+  }
+}
+
+export const useChatStore = create<ChatState>((set) => ({
   chats: [],
   activeChatGuid: null,
 
-  setChats: (chats) => set({ chats }),
+  setChats: (chats) => set({ chats: [...chats].sort(byRecency) }),
 
-  upsertChat: (chat) =>
+  upsertChats: (incoming) =>
     set((s) => {
-      let newChats: ChatRecord[];
-      const idx = s.chats.findIndex((c) => c.guid === chat.guid);
-      if (idx >= 0) {
-        newChats = [...s.chats];
-        newChats[idx] = { ...newChats[idx], ...chat };
-      } else {
-        newChats = [chat, ...s.chats];
+      if (incoming.length === 0) return s;
+      const indexByGuid = new Map<string, number>();
+      for (let i = 0; i < s.chats.length; i++) indexByGuid.set(s.chats[i].guid, i);
+
+      let next: ChatRecord[] | null = null;
+      for (const chat of incoming) {
+        const idx = indexByGuid.get(chat.guid);
+        if (idx === undefined) {
+          next ??= [...s.chats];
+          indexByGuid.set(chat.guid, next.length);
+          next.push(chat);
+        } else if (!sameChat((next ?? s.chats)[idx], chat)) {
+          next ??= [...s.chats];
+          next[idx] = chat;
+        }
       }
-      newChats.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0));
-      return { chats: newChats };
+      if (!next) return s;
+      return { chats: next.sort(byRecency) };
     }),
+
+  upsertChat: (chat) => useChatStore.getState().upsertChats([chat]),
 
   setActiveChatGuid: (guid) => set({ activeChatGuid: guid }),
 
   updateChatLastMessage: (chatGuid, text, date, messageGuid) =>
     set((s) => {
-      const newChats = s.chats.map((c) =>
-        c.guid === chatGuid
-          ? { ...c, lastMessageText: text, lastMessageDate: date, lastMessageGuid: messageGuid }
-          : c
-      );
-      newChats.sort((a, b) => (b.lastMessageDate ?? 0) - (a.lastMessageDate ?? 0));
-      return { chats: newChats };
+      const idx = s.chats.findIndex((c) => c.guid === chatGuid);
+      if (idx < 0) return s;
+      const next = [...s.chats];
+      next[idx] = { ...next[idx], lastMessageText: text, lastMessageDate: date, lastMessageGuid: messageGuid };
+      return { chats: next.sort(byRecency) };
     }),
 
   markChatRead: (chatGuid) =>
-    set((s) => ({
-      chats: s.chats.map((c) => (c.guid === chatGuid ? { ...c, hasUnreadMessage: false } : c)),
-    })),
+    set((s) => {
+      const lastReadAt = Date.now();
+      persist(chatGuid, { hasUnreadMessage: false, lastReadAt });
+      const idx = s.chats.findIndex((c) => c.guid === chatGuid);
+      if (idx < 0) return s;
+      const next = [...s.chats];
+      next[idx] = { ...next[idx], hasUnreadMessage: false, lastReadAt };
+      return { chats: next };
+    }),
 
   markChatUnread: (chatGuid) =>
-    set((s) => ({
-      chats: s.chats.map((c) => (c.guid === chatGuid ? { ...c, hasUnreadMessage: true } : c)),
-    })),
+    set((s) => {
+      const idx = s.chats.findIndex((c) => c.guid === chatGuid);
+      if (idx < 0 || s.chats[idx].hasUnreadMessage) return s;
+      persist(chatGuid, { hasUnreadMessage: true });
+      const next = [...s.chats];
+      next[idx] = { ...next[idx], hasUnreadMessage: true };
+      return { chats: next };
+    }),
 
   togglePin: (chatGuid) =>
     set((s) => {
@@ -78,14 +127,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         pinIndex: wasPinned ? 0 : newPinIndex,
       };
 
-      // Persist to IndexedDB (fire-and-forget)
-      try {
-        db.chats.update(chatGuid, updates)?.catch?.((err: any) => {
-          console.error('[ChatStore] Failed to persist pin state:', err);
-        });
-      } catch {
-        // IndexedDB may not be available in test environment
-      }
+      persist(chatGuid, updates);
 
       return {
         chats: s.chats.map((c) =>

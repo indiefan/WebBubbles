@@ -7,7 +7,7 @@ import { REACTION_TYPE_MAP } from '../components/chat/ReactionPicker';
 import { useMessageStore } from '../stores/messageStore';
 
 import { getDeliveryStatus } from '../components/chat/MessageBubble';
-import { useTypingStore } from '../stores/typingStore';
+import { TYPING_TIMEOUT_MS, useTypingStore } from '../stores/typingStore';
 import { useChatStore } from '../stores/chatStore';
 
 // Mock http methods
@@ -28,6 +28,11 @@ vi.mock('../lib/db', () => ({
     messages: { put: vi.fn(), delete: vi.fn(), update: vi.fn() },
     chats: { update: vi.fn() }
   }
+}));
+
+// The queue hands confirmed messages to the ingest path, which needs a real database
+vi.mock('../services/ingest', () => ({
+  ingestMessages: vi.fn().mockResolvedValue({ messages: [], newGuids: new Set() }),
 }));
 
 describe('DownloadService', () => {
@@ -78,26 +83,45 @@ describe('OutgoingQueue Attachments', () => {
     vi.mocked(http.sendAttachment).mockResolvedValue({ data: { guid: 'real-guid' } });
   });
 
-  it('uses sendAttachment when files are queued', async () => {
-    const file = new File(['text'], 'test.txt', { type: 'text/plain' });
-    
-    await outgoingQueue.enqueue({
+  it('sends each file on its own, then the text as a separate message', async () => {
+    vi.mocked(http.sendText).mockResolvedValue({ data: { guid: 'real-text-guid' } });
+    const first = new File(['one'], 'one.txt', { type: 'text/plain' });
+    const second = new File(['two'], 'two.txt', { type: 'text/plain' });
+
+    outgoingQueue.enqueue({
       chatGuid: 'chat-1',
       tempGuid: 'temp-2',
-      text: 'Here is a file',
-      attachments: [file]
+      text: 'Here are the files',
+      attachments: [first, second]
     });
 
-    // Wait for async processing 
+    // Wait for async processing
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    expect(http.sendAttachment).toHaveBeenCalledWith(
-      'chat-1',
-      'temp-2',
-      file,
-      { message: 'Here is a file' }
-    );
-    expect(http.sendText).not.toHaveBeenCalled();
+    // The server takes one attachment per request and no caption with it
+    expect(http.sendAttachment).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(http.sendAttachment).mock.calls[0][2]).toBe(first);
+    expect(vi.mocked(http.sendAttachment).mock.calls[1][2]).toBe(second);
+    expect(http.sendText).toHaveBeenCalledTimes(1);
+    expect(http.sendText).toHaveBeenCalledWith('chat-1', 'temp-2', 'Here are the files', expect.anything());
+  });
+
+  it('marks a message failed when the send is rejected, and retry sends it again', async () => {
+    useMessageStore.getState().clear();
+    vi.mocked(http.sendText).mockRejectedValueOnce(new Error('HTTP 500'));
+
+    outgoingQueue.enqueue({ chatGuid: 'chat-1', tempGuid: 'temp-fail', text: 'Will fail' });
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const failed = useMessageStore.getState().slices['chat-1']?.pending.find((m) => m.guid === 'temp-fail');
+    expect(failed?.error).toBe(1);
+
+    vi.mocked(http.sendText).mockResolvedValue({ data: { guid: 'real-after-retry' } });
+    outgoingQueue.retry('temp-fail');
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    expect(http.sendText).toHaveBeenCalledTimes(2);
+    expect(useMessageStore.getState().slices['chat-1']?.pending).toHaveLength(0);
   });
 });
 
@@ -200,9 +224,9 @@ describe('Replies', () => {
   });
 
   it('sets threadOriginatorGuid on optimistic message when replying', async () => {
-    vi.mocked(http.sendText).mockResolvedValue({ data: { guid: 'real-reply-guid' } });
+    vi.mocked(http.sendText).mockReturnValue(new Promise(() => {}));
 
-    await outgoingQueue.enqueue({
+    outgoingQueue.enqueue({
       chatGuid: 'chat-1',
       tempGuid: 'temp-reply-2',
       text: 'Reply text',
@@ -210,7 +234,7 @@ describe('Replies', () => {
     });
 
     // The optimistic message should have threadOriginatorGuid set
-    const msgs = useMessageStore.getState().slices['chat-1']?.messages ?? [];
+    const msgs = useMessageStore.getState().slices['chat-1']?.pending ?? [];
     const optimistic = msgs.find((m) => m.guid === 'temp-reply-2');
     expect(optimistic).toBeDefined();
     expect(optimistic!.threadOriginatorGuid).toBe('parent-msg-guid');
@@ -247,7 +271,7 @@ describe('Message Editing & Unsending', () => {
       error: 0,
     } as any;
 
-    useMessageStore.getState().addMessage('chat-1', msg);
+    useMessageStore.getState().hydrate('chat-1', [msg]);
     expect(useMessageStore.getState().slices['chat-1']?.messages[0].text).toBe('Original text');
 
     const now = Date.now();
@@ -270,7 +294,7 @@ describe('Message Editing & Unsending', () => {
       error: 0,
     } as any;
 
-    useMessageStore.getState().addMessage('chat-1', msg);
+    useMessageStore.getState().hydrate('chat-1', [msg]);
     expect(useMessageStore.getState().slices['chat-1']?.messages[0].text).toBe('Will be unsent');
 
     const now = Date.now();
@@ -381,12 +405,12 @@ describe('Typing Indicators', () => {
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
   });
 
-  it('auto-clears typing state after 5 seconds', () => {
+  it('auto-clears typing state when no stop event arrives', () => {
     vi.useFakeTimers();
     useTypingStore.getState().setTyping('chat-1', '+1234567890');
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeDefined();
 
-    vi.advanceTimersByTime(5000);
+    vi.advanceTimersByTime(TYPING_TIMEOUT_MS);
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
     vi.useRealTimers();
   });
@@ -395,16 +419,14 @@ describe('Typing Indicators', () => {
     vi.useFakeTimers();
     useTypingStore.getState().setTyping('chat-1', '+1234567890');
 
-    // Advance 3s, then set again
-    vi.advanceTimersByTime(3000);
+    vi.advanceTimersByTime(TYPING_TIMEOUT_MS - 1000);
     useTypingStore.getState().setTyping('chat-1', '+1234567890');
 
-    // 3s more — only 3s since last setTyping, should still be present
-    vi.advanceTimersByTime(3000);
+    // Past the first deadline, but not the renewed one
+    vi.advanceTimersByTime(TYPING_TIMEOUT_MS - 1000);
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeDefined();
 
-    // 2s more — 5s since last setTyping, should auto-clear
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(1000);
     expect(useTypingStore.getState().typingByChatGuid['chat-1']).toBeUndefined();
     vi.useRealTimers();
   });
@@ -490,7 +512,7 @@ describe('Chat-Keyed Message Store', () => {
       error: 0,
     } as any;
 
-    useMessageStore.getState().addMessage('chat-A', msgA);
+    useMessageStore.getState().hydrate('chat-A', [msgA]);
 
     // Chat-A should have the message
     const sliceA = useMessageStore.getState().slices['chat-A'];
@@ -507,27 +529,27 @@ describe('Chat-Keyed Message Store', () => {
 
     // Fill up to the limit
     for (let i = 0; i < MAX_CACHED_CHATS; i++) {
-      useMessageStore.getState().addMessage(`chat-${i}`, {
+      useMessageStore.getState().hydrate(`chat-${i}`, [{
         guid: `msg-${i}`,
         chatGuid: `chat-${i}`,
         text: `msg ${i}`,
-        dateCreated: Date.now() + i, // ensure different lastAccessed
+        dateCreated: Date.now() + i,
         isFromMe: false,
         error: 0,
-      } as any);
+      } as any]);
     }
 
     expect(Object.keys(useMessageStore.getState().slices)).toHaveLength(MAX_CACHED_CHATS);
 
     // Add one more — should trigger eviction of the oldest (chat-0)
-    useMessageStore.getState().addMessage('chat-overflow', {
+    useMessageStore.getState().hydrate('chat-overflow', [{
       guid: 'msg-overflow',
       chatGuid: 'chat-overflow',
       text: 'overflow',
       dateCreated: Date.now() + 100,
       isFromMe: false,
       error: 0,
-    } as any);
+    } as any]);
 
     const sliceKeys = Object.keys(useMessageStore.getState().slices);
     expect(sliceKeys).toHaveLength(MAX_CACHED_CHATS);

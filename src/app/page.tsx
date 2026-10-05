@@ -7,18 +7,16 @@ import { useSyncStore } from "@/stores/syncStore";
 import { http } from "@/services/http";
 import { socketService } from "@/services/socket";
 import { registerActionHandlers } from "@/services/actionHandler";
-import { runFullSync } from "@/services/sync";
 import { fetchDevSession } from "@/services/devSession";
 
 export default function SetupPage() {
   const router = useRouter();
   const { serverAddress, password, setCredentials, setServerInfo } = useConnectionStore();
-  const { status: syncStatus, progress, currentLabel } = useSyncStore();
 
   const [url, setUrl] = useState(serverAddress || "");
   const [pw, setPw] = useState(password || "");
   const [error, setError] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"form" | "connecting" | "syncing">("form");
+  const [phase, setPhase] = useState<"form" | "connecting">("form");
 
   // If already set up and synced, redirect to chats
   useEffect(() => {
@@ -62,10 +60,8 @@ export default function SetupPage() {
       socketService.connect(cleanUrl, serverPassword);
       registerActionHandlers();
 
-      // Run full sync
-      setPhase("syncing");
-      await runFullSync();
-
+      // The chat list and messages load in the background once the app is open
+      useSyncStore.getState().setLastFullSync(Date.now());
       router.push("/chats");
     } catch (err: any) {
       setError(err.message || "Failed to connect");
@@ -104,16 +100,7 @@ export default function SetupPage() {
           <p>Connect to your macOS server to continue.</p>
         </div>
 
-        {phase === "syncing" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", alignItems: "center" }}>
-            <span className="loading-spinner" style={{ width: 32, height: 32 }}></span>
-            <p style={{ color: "var(--muted)", fontSize: 14 }}>{currentLabel || "Syncing..."}</p>
-            <div style={{ width: "100%", height: 6, borderRadius: 3, background: "rgba(255,255,255,0.1)", overflow: "hidden" }}>
-              <div style={{ width: `${progress}%`, height: "100%", borderRadius: 3, background: "var(--accent)", transition: "width 0.3s ease" }} />
-            </div>
-            <span style={{ color: "var(--muted)", fontSize: 12 }}>{progress}%</span>
-          </div>
-        ) : (
+        {(
           <form onSubmit={handleConnect} style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
             <div className="form-group">
               <label htmlFor="url">Server URL</label>

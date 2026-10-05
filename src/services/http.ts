@@ -61,8 +61,6 @@ export class HttpService {
     const timeoutMs = opts.timeoutMs ?? this.timeout;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    console.log(`[HTTP] ${method} ${path}`, opts.body ? JSON.stringify(opts.body).slice(0, 200) : '');
-
     try {
       const res = await fetch(url, {
         method,
@@ -80,11 +78,9 @@ export class HttpService {
       });
 
       clearTimeout(timeoutId);
-      console.log(`[HTTP] ${method} ${path} → ${res.status}`);
 
       if (!res.ok) {
         const text = await res.text().catch(() => '');
-        console.error(`[HTTP] Error body:`, text);
         throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
       }
 
@@ -95,7 +91,7 @@ export class HttpService {
       return json as T;
     } catch (e: any) {
       clearTimeout(timeoutId);
-      console.error(`[HTTP] ${method} ${path} failed:`, e.message);
+      console.warn(`[HTTP] ${method} ${path} failed: ${e.message}`);
       if (e.name === 'AbortError') {
         throw new Error(`Request timed out after ${timeoutMs / 1000}s: ${method} ${path}`);
       }
@@ -260,13 +256,19 @@ export class HttpService {
     });
   }
 
-  sendAttachment(chatGuid: string, tempGuid: string, file: File, opts: { message?: string; method?: string } = {}) {
+  sendAttachment(
+    chatGuid: string,
+    tempGuid: string,
+    file: File,
+    opts: { method?: string; selectedMessageGuid?: string } = {},
+  ) {
+    // The server sends one attachment per request and takes no caption with it
     const formData = new FormData();
     formData.append('chatGuid', chatGuid);
     formData.append('tempGuid', tempGuid);
     formData.append('name', file.name);
     formData.append('method', opts.method ?? 'private-api');
-    if (opts.message) formData.append('message', opts.message);
+    if (opts.selectedMessageGuid) formData.append('selectedMessageGuid', opts.selectedMessageGuid);
     formData.append('attachment', file);
     return this.request('POST', '/message/attachment', {
       body: formData,
@@ -302,10 +304,19 @@ export class HttpService {
   }
 
   // ─── Attachments ─────────────────────────────────────
-  downloadAttachment(guid: string, signal?: AbortSignal): Promise<Blob> {
+  /**
+   * Download an attachment. Passing `width` asks the server for a resized copy
+   * of an image (it caches these), which is far smaller than the original.
+   */
+  downloadAttachment(
+    guid: string,
+    opts: { width?: number; quality?: 'good' | 'better' | 'best'; signal?: AbortSignal } = {},
+  ): Promise<Blob> {
     return this.request('GET', `/attachment/${encodeURIComponent(guid)}/download`, {
+      query: { width: opts.width, quality: opts.quality },
       responseType: 'blob',
-      signal,
+      signal: opts.signal,
+      timeoutMs: 120_000,
     });
   }
 

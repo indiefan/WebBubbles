@@ -26,17 +26,25 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
 
   // Load draft from IndexedDB
   useEffect(() => {
+    // The parent remounts this component per chat, so state starts empty
+    let cancelled = false;
     db.drafts.get(chatGuid).then((d) => {
-      if (d) {
+      if (d && !cancelled) {
         setText(d.text);
         setDraft(d.text);
       }
     });
+    return () => {
+      cancelled = true;
+    };
   }, [chatGuid]);
 
-  // Reset typing throttle when switching chats
+  // Stop typing in a chat when leaving it
   useEffect(() => {
-    lastTypingEmitRef.current = 0;
+    return () => {
+      if (lastTypingEmitRef.current !== 0) socketService.sendEvent("stopped-typing", { chatGuid });
+      lastTypingEmitRef.current = 0;
+    };
   }, [chatGuid]);
 
   // Auto-save draft
@@ -61,15 +69,23 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
     const now = Date.now();
     if (now - lastTypingEmitRef.current < TYPING_THROTTLE_MS) return;
     lastTypingEmitRef.current = now;
-    socketService.sendEvent("typing-indicator", { chatGuid, display: true });
+    socketService.sendEvent("started-typing", { chatGuid });
+  }, [chatGuid]);
+
+  const stopTypingIndicator = useCallback(() => {
+    if (lastTypingEmitRef.current === 0) return;
+    lastTypingEmitRef.current = 0;
+    socketService.sendEvent("stopped-typing", { chatGuid });
   }, [chatGuid]);
 
   const handleTextChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     setText(e.target.value);
     if (e.target.value.length > 0) {
       sendTypingIndicator();
+    } else {
+      stopTypingIndicator();
     }
-  }, [sendTypingIndicator]);
+  }, [sendTypingIndicator, stopTypingIndicator]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,6 +96,7 @@ export function ComposeArea({ chatGuid, onSend }: ComposeAreaProps) {
     const replyGuid = replyToMessage?.guid ?? undefined;
     setText("");
     setFiles([]);
+    stopTypingIndicator();
 
     // Clear draft
     db.drafts.delete(chatGuid).catch(() => {});

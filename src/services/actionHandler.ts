@@ -1,219 +1,106 @@
-// ActionHandler — central event router for incoming server events.
-// Processes new/updated messages, typing indicators, and chat events,
-// updating both IndexedDB and Zustand stores.
+// ActionHandler — routes incoming socket events to the ingest path and stores.
 
-import { db, MessageRecord, ChatRecord } from '@/lib/db';
 import { useChatStore } from '@/stores/chatStore';
-import { useMessageStore } from '@/stores/messageStore';
 import { useTypingStore } from '@/stores/typingStore';
 import { socketService } from './socket';
+import { ingestMessages, refreshChat } from './ingest';
+import { chatIconCache } from './chatIconCache';
+import { outgoingQueue } from './outgoingQueue';
 
-// Duplicate detection: keep track of recently processed GUIDs
-const recentGuids = new Set<string>();
-const MAX_RECENT = 200;
+export { serverMessageToRecord, serverChatToRecord } from './records';
 
-function trackGuid(guid: string) {
-  recentGuids.add(guid);
-  if (recentGuids.size > MAX_RECENT) {
-    const first = recentGuids.values().next().value;
-    if (first) recentGuids.delete(first);
-  }
-}
-
-// ─── Converters ────────────────────────────────────────
-
-export function serverMessageToRecord(data: any): MessageRecord {
-  return {
-    guid: data.guid,
-    chatGuid: data.chats?.[0]?.guid ?? data.chatGuid ?? '',
-    handleAddress: data.handle?.address ?? data.handleId ?? null,
-    text: data.text ?? null,
-    subject: data.subject ?? null,
-    dateCreated: data.dateCreated ?? Date.now(),
-    dateRead: data.dateRead ?? null,
-    dateDelivered: data.dateDelivered ?? null,
-    dateEdited: data.dateEdited ?? null,
-    dateDeleted: data.dateDeleted ?? null,
-    isFromMe: data.isFromMe ?? false,
-    hasAttachments: !!(data.attachments?.length) || data.hasAttachments || false,
-    hasReactions: data.hasReactions ?? false,
-    isBookmarked: data.isBookmarked ?? false,
-    associatedMessageGuid: data.associatedMessageGuid ?? null,
-    associatedMessageType: data.associatedMessageType ?? null,
-    associatedMessagePart: data.associatedMessagePart ?? null,
-    threadOriginatorGuid: data.threadOriginatorGuid ?? null,
-    threadOriginatorPart: data.threadOriginatorPart ?? null,
-    expressiveSendStyleId: data.expressiveSendStyleId ?? null,
-    error: data.error ?? 0,
-    itemType: data.itemType ?? null,
-    groupTitle: data.groupTitle ?? null,
-    groupActionType: data.groupActionType ?? null,
-    balloonBundleId: data.balloonBundleId ?? null,
-    attributedBody: data.attributedBody ?? null,
-    messageSummaryInfo: data.messageSummaryInfo ?? null,
-    payloadData: data.payloadData ?? null,
-    metadata: data.metadata ?? null,
-  };
-}
-
-export function serverChatToRecord(data: any): ChatRecord {
-  return {
-    guid: data.guid,
-    chatIdentifier: data.chatIdentifier ?? '',
-    displayName: data.displayName ?? null,
-    isArchived: data.isArchived ?? false,
-    isPinned: data.isPinned ?? false,
-    pinIndex: data.pinIndex ?? 0,
-    hasUnreadMessage: data.hasUnreadMessage ?? false,
-    muteType: data.muteType ?? null,
-    muteArgs: data.muteArgs ?? null,
-    autoSendReadReceipts: data.autoSendReadReceipts ?? null,
-    autoSendTypingIndicators: data.autoSendTypingIndicators ?? null,
-    title: data.title ?? null,
-    lastMessageGuid: data.lastMessage?.guid ?? null,
-    lastMessageDate: data.lastMessage?.dateCreated ?? null,
-    lastMessageText: data.lastMessage?.text ?? null,
-    lastReadMessageGuid: data.lastReadMessageGuid ?? null,
-    dateDeleted: data.dateDeleted ?? null,
-    style: data.style ?? null,
-    customAvatarPath: data.customAvatarPath ?? null,
-    participantHandleAddresses: data.participants?.map((p: any) => p.address) ?? [],
-  };
+/** Socket payloads arrive either bare or wrapped in `{ data }`. */
+function unwrap(rawData: any) {
+  return rawData?.data ?? rawData;
 }
 
 // ─── Handlers ──────────────────────────────────────────
 
 async function handleNewMessage(rawData: any) {
-  const data = rawData?.data ?? rawData;
+  const data = unwrap(rawData);
   if (!data?.guid) return;
-  if (recentGuids.has(data.guid)) return;
-  trackGuid(data.guid);
 
-  const msg = serverMessageToRecord(data);
+  const { messages } = await ingestMessages([data], { live: true });
+  const msg = messages[0];
+  if (!msg) return;
 
-  // If the server tells us this was an optimistic message, clean up the temp record.
-  if (data.tempGuid) {
-    await db.messages.delete(data.tempGuid);
-    // Replace the temp message in the store to avoid duplicates if socket beats HTTP
-    useMessageStore.getState().replaceTempGuid(msg.chatGuid, data.tempGuid, msg.guid, msg);
-  }
-
-  // Upsert to IndexedDB
-  await db.messages.put(msg);
-
-  // Update store (scoped to the message's chat)
-  if (msg.chatGuid) {
-    useMessageStore.getState().addMessage(msg.chatGuid, msg);
-  }
-
-  // Update chat's lastMessage
-  if (msg.chatGuid) {
-    useChatStore.getState().updateChatLastMessage(
-      msg.chatGuid,
-      msg.text,
-      msg.dateCreated,
-      msg.guid,
-    );
-
-    await db.chats.update(msg.chatGuid, {
-      lastMessageText: msg.text,
-      lastMessageDate: msg.dateCreated,
-      lastMessageGuid: msg.guid,
-    });
-
-    // Mark unread if not from me and not the active chat
-    const activeChat = useChatStore.getState().activeChatGuid;
-    if (!msg.isFromMe && msg.chatGuid !== activeChat) {
-      useChatStore.getState().markChatUnread(msg.chatGuid);
-    }
-  }
-
-  // Upsert handles and attachments if present
-  if (data.handle) {
-    await db.handles.put({
-      address: data.handle.address,
-      service: data.handle.service ?? 'iMessage',
-      formattedAddress: data.handle.formattedAddress ?? null,
-      country: data.handle.country ?? null,
-      color: data.handle.color ?? null,
-      contactId: data.handle.contactId ?? null,
-      originalROWID: data.handle.originalROWID ?? null,
-    });
-  }
-
-  if (data.attachments?.length) {
-    for (const att of data.attachments) {
-      await db.attachments.put({
-        guid: att.guid,
-        messageGuid: msg.guid,
-        uti: att.uti ?? null,
-        mimeType: att.mimeType ?? null,
-        transferName: att.transferName ?? null,
-        totalBytes: att.totalBytes ?? null,
-        height: att.height ?? null,
-        width: att.width ?? null,
-        hasLivePhoto: att.hasLivePhoto ?? false,
-        webUrl: att.webUrl ?? null,
-        metadata: att.metadata ?? null,
-      });
-    }
-  }
+  if (data.tempGuid) outgoingQueue.confirm(data.tempGuid);
+  // Whoever was typing has now sent
+  if (!msg.isFromMe) useTypingStore.getState().clearTyping(msg.chatGuid);
 }
 
 async function handleUpdatedMessage(rawData: any) {
-  const data = rawData?.data ?? rawData;
+  const data = unwrap(rawData);
   if (!data?.guid) return;
-
-  const msg = serverMessageToRecord(data);
-  await db.messages.put(msg);
-  if (msg.chatGuid) {
-    useMessageStore.getState().updateMessage(msg.chatGuid, msg.guid, msg);
-  }
+  await ingestMessages([data]);
 }
 
-function handleTypingIndicator(data: any) {
-  const payload = data?.data ?? data;
-  const chatGuid = payload?.guid ?? payload?.chatGuid;
-  const senderAddress = payload?.handle ?? payload?.handleAddress ?? payload?.senderAddress;
-  const isDisplay = payload?.display ?? true;
+async function handleSendError(rawData: any) {
+  const data = unwrap(rawData);
+  if (!data?.guid) return;
+  await ingestMessages([data]);
+  if (data.tempGuid) outgoingQueue.confirm(data.tempGuid);
+}
 
+function handleTypingIndicator(rawData: any) {
+  const payload = unwrap(rawData);
+  const chatGuid = payload?.guid ?? payload?.chatGuid;
   if (!chatGuid) return;
 
-  if (isDisplay && senderAddress) {
-    useTypingStore.getState().setTyping(chatGuid, senderAddress);
+  // The server only reports typing for 1:1 chats and doesn't name the sender
+  if (payload?.display ?? true) {
+    useTypingStore.getState().setTyping(chatGuid, payload?.handle ?? payload?.senderAddress ?? '');
   } else {
     useTypingStore.getState().clearTyping(chatGuid);
   }
 }
 
-function handleChatReadStatus(data: any) {
-  const chatGuid = data?.chatGuid ?? data?.guid;
+function handleChatReadStatus(rawData: any) {
+  const payload = unwrap(rawData);
+  const chatGuid = payload?.chatGuid ?? payload?.guid;
   if (!chatGuid) return;
-  useChatStore.getState().markChatRead(chatGuid);
+  if (payload?.read === false) useChatStore.getState().markChatUnread(chatGuid);
+  else useChatStore.getState().markChatRead(chatGuid);
+}
+
+/**
+ * Renames, membership changes and icon changes arrive as the message that
+ * records them. Keep the message for the timeline and re-read the chat itself.
+ */
+async function handleGroupEvent(rawData: any) {
+  const data = unwrap(rawData);
+  const chatGuid = data?.chats?.[0]?.guid ?? data?.chatGuid;
+  if (data?.guid) await ingestMessages([data], { live: true });
+  if (chatGuid) {
+    chatIconCache.invalidate(chatGuid);
+    await refreshChat(chatGuid);
+  }
 }
 
 // ─── Registration ──────────────────────────────────────
 
+let registered = false;
+
 export function registerActionHandlers() {
+  if (registered) return;
+  registered = true;
+
   socketService.on('new-message', handleNewMessage);
   socketService.on('updated-message', handleUpdatedMessage);
+  socketService.on('message-send-error', handleSendError);
   socketService.on('typing-indicator', handleTypingIndicator);
   socketService.on('chat-read-status-changed', handleChatReadStatus);
 
-  socketService.on('group-name-change', async (data: any) => {
-    const chatGuid = data?.chatGuid ?? data?.guid;
-    if (!chatGuid) return;
-    const displayName = data?.displayName ?? data?.newChatName;
-    if (displayName !== undefined) {
-      await db.chats.update(chatGuid, { displayName });
-      const chat = await db.chats.get(chatGuid);
-      if (chat) {
-        useChatStore.getState().upsertChat(chat);
-      }
-    }
-  });
-
-  console.log('[ActionHandler] All handlers registered');
+  for (const event of [
+    'group-name-change',
+    'group-icon-changed',
+    'group-icon-removed',
+    'participant-added',
+    'participant-removed',
+    'participant-left',
+  ]) {
+    socketService.on(event, handleGroupEvent);
+  }
 }
 
 export { handleNewMessage, handleUpdatedMessage };

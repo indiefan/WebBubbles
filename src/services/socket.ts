@@ -26,11 +26,18 @@ export class SocketService {
     this.socket.on('connect', () => {
       console.log('[Socket] Connected');
       this.setSocketState('connected');
+      // Fires on every (re)connect, which is when missed events need catching up
+      this.emit('connect', null);
     });
 
     this.socket.on('disconnect', (reason) => {
       console.log('[Socket] Disconnected:', reason);
       this.setSocketState('disconnected');
+      // socket.io retries on its own for network drops, but not when the
+      // server closed the connection deliberately (e.g. while restarting)
+      if (reason === 'io server disconnect') {
+        this.reconnectTimer = setTimeout(() => this.ensureConnected(), 2000);
+      }
     });
 
     this.socket.on('connect_error', (err) => {
@@ -49,7 +56,10 @@ export class SocketService {
       'updated-message',
       'typing-indicator',
       'chat-read-status-changed',
+      'message-send-error',
       'group-name-change',
+      'group-icon-changed',
+      'group-icon-removed',
       'participant-added',
       'participant-removed',
       'participant-left',
@@ -60,7 +70,6 @@ export class SocketService {
 
     for (const event of events) {
       this.socket.on(event, (data: any) => {
-        console.log(`[Socket] Event: ${event}`, data);
         this.emit(event, data);
       });
     }
@@ -102,6 +111,16 @@ export class SocketService {
     if (this.socket?.connected) {
       this.socket.emit(event, data);
     }
+  }
+
+  /** Reconnect right away instead of waiting out the backoff (e.g. after the laptop wakes). */
+  ensureConnected() {
+    if (this.socket && !this.socket.connected) this.socket.connect();
+  }
+
+  /** True once connect() has been called, whether or not the link is up yet. */
+  get isStarted() {
+    return this.socket !== null;
   }
 
   get isConnected() {

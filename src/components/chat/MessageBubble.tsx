@@ -1,121 +1,24 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, { memo, useEffect, useState, useCallback, useRef } from "react";
 import { format } from "date-fns";
 import { db, MessageRecord } from "@/lib/db";
-import { useContactStore } from "@/stores/contactStore";
 import { useMessageStore } from "@/stores/messageStore";
-import { useConnectionStore } from "@/stores/connectionStore";
 import { http } from "@/services/http";
+import { outgoingQueue } from "@/services/outgoingQueue";
+import { NO_REACTIONS, ReactionGroup } from "@/services/reactions";
 import { MessageAttachmentGroup } from "./MessageAttachment";
 import { ReactionPicker } from "./ReactionPicker";
 import { ReplyPreview } from "./ReplyPreview";
 
-// iMessage associatedMessageType values → emoji
-// The server may send EITHER numeric codes OR string names.
-// Numeric: Positive values = add reaction, negative = remove
-// String:  "love", "like", "dislike", "laugh", "emphasize", "question"
-//          with "-" prefix for removal (e.g. "-love")
-const REACTION_EMOJI_BY_NUM: Record<number, { emoji: string; base: number }> = {
-  2000: { emoji: "❤️", base: 2000 },   // love
-  2001: { emoji: "👍", base: 2001 },   // like
-  2002: { emoji: "👎", base: 2002 },   // dislike
-  2003: { emoji: "😂", base: 2003 },   // laugh
-  2004: { emoji: "‼️", base: 2004 },   // emphasize
-  2005: { emoji: "❓", base: 2005 },   // question
-  3000: { emoji: "❤️", base: 2000 },   // love remove
-  3001: { emoji: "👍", base: 2001 },
-  3002: { emoji: "👎", base: 2002 },
-  3003: { emoji: "😂", base: 2003 },
-  3004: { emoji: "‼️", base: 2004 },
-  3005: { emoji: "❓", base: 2005 },
-};
-
-const REACTION_EMOJI_BY_NAME: Record<string, { emoji: string; base: string }> = {
-  "love":       { emoji: "❤️", base: "love" },
-  "like":       { emoji: "👍", base: "like" },
-  "dislike":    { emoji: "👎", base: "dislike" },
-  "laugh":      { emoji: "😂", base: "laugh" },
-  "emphasize":  { emoji: "‼️", base: "emphasize" },
-  "question":   { emoji: "❓", base: "question" },
-  "-love":      { emoji: "❤️", base: "love" },
-  "-like":      { emoji: "👍", base: "like" },
-  "-dislike":   { emoji: "👎", base: "dislike" },
-  "-laugh":     { emoji: "😂", base: "laugh" },
-  "-emphasize": { emoji: "‼️", base: "emphasize" },
-  "-question":  { emoji: "❓", base: "question" },
-};
-
-interface ReactionGroup {
-  emoji: string;
-  count: number;
-  isFromMe: boolean;
-}
-
-function parseReactionType(raw: string | number | null | undefined): { emoji: string; base: string; isRemoval: boolean } | null {
-  if (raw == null) return null;
-
-  // Try numeric first
-  const num = typeof raw === "number" ? raw : parseInt(String(raw), 10);
-  if (!isNaN(num) && REACTION_EMOJI_BY_NUM[num]) {
-    const entry = REACTION_EMOJI_BY_NUM[num];
-    return { emoji: entry.emoji, base: String(entry.base), isRemoval: num >= 3000 };
-  }
-
-  // Try string name (e.g. "love", "-love")
-  const str = String(raw).toLowerCase();
-  const entry = REACTION_EMOJI_BY_NAME[str];
-  if (entry) {
-    return { emoji: entry.emoji, base: entry.base, isRemoval: str.startsWith("-") };
-  }
-
-  return null;
-}
-
-function groupReactions(reactionMessages: MessageRecord[]): ReactionGroup[] {
-  // Track net reactions: key = senderAddress|baseType
-  const reactionState = new Map<string, { emoji: string; isFromMe: boolean }>();
-
-  // Sort by date so we process in chronological order
-  const sorted = [...reactionMessages].sort((a, b) => a.dateCreated - b.dateCreated);
-
-  for (const msg of sorted) {
-    const parsed = parseReactionType(msg.associatedMessageType);
-    if (!parsed) continue;
-
-    const sender = msg.handleAddress || (msg.isFromMe ? "__me__" : "__unknown__");
-    const key = `${sender}|${parsed.base}`;
-
-    if (parsed.isRemoval) {
-      reactionState.delete(key);
-    } else {
-      reactionState.set(key, { emoji: parsed.emoji, isFromMe: msg.isFromMe });
-    }
-  }
-
-  // Group by emoji
-  const grouped = new Map<string, { count: number; isFromMe: boolean }>();
-  for (const { emoji, isFromMe } of reactionState.values()) {
-    const existing = grouped.get(emoji);
-    if (existing) {
-      existing.count++;
-      if (isFromMe) existing.isFromMe = true;
-    } else {
-      grouped.set(emoji, { count: 1, isFromMe });
-    }
-  }
-
-  return Array.from(grouped.entries()).map(([emoji, { count, isFromMe }]) => ({
-    emoji,
-    count,
-    isFromMe,
-  }));
-}
-
 interface MessageBubbleProps {
   msg: MessageRecord;
-  isGroupChat: boolean;
   chatGuid: string;
+  /** Name shown above an incoming bubble in a group chat. */
+  senderName?: string | null;
+  reactions?: ReactionGroup[];
+  /** The message this one replies to, when it is loaded. */
+  replyTo?: MessageRecord;
 }
 
 /** Derive the delivery status for a message's status line. Exported for testing. */
@@ -144,9 +47,49 @@ export function getDeliveryStatus(msg: MessageRecord): { text: string; className
   return { text: "Sent", className: "message-status" };
 }
 
-export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps) {
-  const { resolveDisplayName } = useContactStore();
-  const [reactions, setReactions] = useState<ReactionGroup[]>([]);
+/**
+ * Wording for messages that record a group event instead of carrying content.
+ * Returns null for ordinary messages. Exported for testing.
+ */
+export function describeGroupEvent(msg: MessageRecord, who: string): string | null {
+  switch (msg.itemType) {
+    case 1:
+      return `${who} ${msg.groupActionType === 1 ? "removed someone from" : "added someone to"} the conversation`;
+    case 2:
+      return msg.groupTitle
+        ? `${who} named the conversation “${msg.groupTitle}”`
+        : `${who} removed the conversation name`;
+    case 3:
+      if (msg.groupActionType === 1) return `${who} changed the group photo`;
+      if (msg.groupActionType === 2) return `${who} removed the group photo`;
+      return `${who} left the conversation`;
+    default:
+      return null;
+  }
+}
+
+const URL_PATTERN = /(https?:\/\/[^\s<]+[^\s<.,;:!?)\]}'"])/g;
+
+/** Message text with links made clickable. */
+function MessageText({ text }: { text: string }) {
+  const parts = text.split(URL_PATTERN);
+  if (parts.length === 1) return <div className="message-text">{text}</div>;
+  return (
+    <div className="message-text">
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer">
+            {part}
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </div>
+  );
+}
+
+function MessageBubbleImpl({ msg, chatGuid, senderName, reactions = NO_REACTIONS, replyTo }: MessageBubbleProps) {
   const [showPicker, setShowPicker] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(msg.text || "");
@@ -159,38 +102,6 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
   const isUnsent = !!msg.dateDeleted;
   const isEdited = !!msg.dateEdited && !isUnsent;
 
-  // Load reactions for this message — check both plain GUID and p:N/ prefix formats
-  useEffect(() => {
-    if (!msg.guid || isTemp) return;
-    let cancelled = false;
-
-    const loadReactions = async () => {
-      try {
-        // iMessage stores associatedMessageGuid as either "GUID" or "p:N/GUID"
-        // Query all possible formats in a single lookup
-        const reactionMsgs = await db.messages
-          .where("associatedMessageGuid")
-          .anyOf([
-            msg.guid,
-            `p:0/${msg.guid}`,
-            `p:1/${msg.guid}`,
-            `p:2/${msg.guid}`,
-            `p:3/${msg.guid}`,
-          ])
-          .toArray();
-
-        if (!cancelled) {
-          setReactions(reactionMsgs.length > 0 ? groupReactions(reactionMsgs) : []);
-        }
-      } catch (e) {
-        console.error("[MessageBubble] Failed to load reactions for", msg.guid, e);
-      }
-    };
-
-    loadReactions();
-    return () => { cancelled = true; };
-  }, [msg.guid, isTemp]);
-
   // Focus edit input when entering edit mode
   useEffect(() => {
     if (isEditing && editInputRef.current) {
@@ -199,19 +110,10 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     }
   }, [isEditing]);
 
-  const formatTime = (ts: number) => {
-    return format(new Date(ts), "h:mm a");
-  };
-
-  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+  const togglePicker = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    if (!isEditing) setShowPicker(prev => !prev);
-  }, [isEditing]);
-
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    if (!isEditing) setShowPicker(prev => !prev);
-  }, [isEditing]);
+    if (!isEditing && !isTemp) setShowPicker(prev => !prev);
+  }, [isEditing, isTemp]);
 
   const handleReply = useCallback(() => {
     useMessageStore.getState().setReplyToMessage(msg);
@@ -248,7 +150,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     } finally {
       setEditLoading(false);
     }
-  }, [editText, msg.guid, msg.text]);
+  }, [editText, msg.guid, msg.text, chatGuid]);
 
   const handleUnsend = useCallback(async () => {
     setShowPicker(false);
@@ -261,7 +163,7 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     } catch (err) {
       console.error("[MessageBubble] Unsend failed:", err);
     }
-  }, [msg.guid]);
+  }, [msg.guid, chatGuid]);
 
   const handleEditKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -272,35 +174,30 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
     }
   }, [handleSaveEdit, handleCancelEdit]);
 
+  const groupEvent = describeGroupEvent(msg, msg.isFromMe ? "You" : senderName || "Someone");
+  if (groupEvent) {
+    return <div className="message-event">{groupEvent}</div>;
+  }
+
   // Can edit/unsend: own message, not temp, not already unsent
   const canModify = msg.isFromMe && !isTemp && !isUnsent;
-
+  const hasAttachments = (msg.attachments?.length ?? 0) > 0;
   const status = getDeliveryStatus(msg);
 
   return (
-    <div key={msg.guid} style={{ position: "relative" }}>
+    <div className="message-row">
       <div
         className={`message-bubble ${msg.isFromMe ? "sent" : "received"} ${isUnsent ? "message-unsent" : ""}`}
-        style={{ opacity: isTemp ? 0.6 : 1, position: "relative" }}
-        onDoubleClick={handleDoubleClick}
-        onContextMenu={handleContextMenu}
+        style={{ opacity: isTemp && !hasError ? 0.6 : 1, position: "relative" }}
+        onDoubleClick={togglePicker}
+        onContextMenu={togglePicker}
       >
         {/* Reply preview — shows what message this is replying to */}
         {msg.threadOriginatorGuid && (
-          <ReplyPreview threadOriginatorGuid={msg.threadOriginatorGuid} variant="bubble" />
+          <ReplyPreview threadOriginatorGuid={msg.threadOriginatorGuid} variant="bubble" message={replyTo} />
         )}
 
-        {!msg.isFromMe && isGroupChat && msg.handleAddress && (
-          <div style={{
-            fontSize: 11,
-            fontWeight: 600,
-            color: "var(--accent)",
-            marginBottom: 2,
-            opacity: 0.9,
-          }}>
-            {resolveDisplayName(msg.handleAddress)}
-          </div>
-        )}
+        {senderName && !msg.isFromMe && <div className="message-sender">{senderName}</div>}
 
         {/* Message content: unsent, editing, or normal */}
         {isUnsent ? (
@@ -335,8 +232,9 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
           </div>
         ) : (
           <>
-            {msg.text && <div>{msg.text}</div>}
+            {msg.text && <MessageText text={msg.text} />}
             <MessageAttachmentGroup msg={msg} />
+            {!msg.text && !hasAttachments && <div className="message-unsent-text">Unsupported message</div>}
             {isEdited && <div className="message-edited-label">Edited</div>}
           </>
         )}
@@ -404,12 +302,21 @@ export function MessageBubble({ msg, isGroupChat, chatGuid }: MessageBubbleProps
           </div>
         )}
       </div>
-      <div className={status.className} style={{
-        textAlign: msg.isFromMe ? "right" : "left",
-      }}>
+      <div className={status.className} style={{ textAlign: msg.isFromMe ? "right" : "left" }}>
         {status.text}
+        {hasError && isTemp && (
+          <>
+            <button className="message-status-action" onClick={() => outgoingQueue.retry(msg.guid)}>
+              Retry
+            </button>
+            <button className="message-status-action" onClick={() => outgoingQueue.discard(msg.guid)}>
+              Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
+export const MessageBubble = memo(MessageBubbleImpl);

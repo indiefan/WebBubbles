@@ -1,185 +1,426 @@
-// Sync service — full sync (initial), incremental sync (ongoing), and contact sync.
+// Sync engine: keeps IndexedDB complete and current, and loads chats from it.
+//
+// Two guarantees hold everything together:
+//
+//  1. Catch-up. A cursor records the highest server ROWID we have ingested.
+//     Every reconnect, tab focus and periodic sweep asks the server for all
+//     messages past it, so nothing that arrives while we're away is missed —
+//     including messages delivered late with an old timestamp.
+//
+//  2. Coverage. Each chat records `syncedFrom`: every message dated at or
+//     after it is in IndexedDB. A chat therefore renders straight from local
+//     data, and the network only ever adds to it.
 
-import { db, ContactRecord } from '@/lib/db';
+import Dexie from 'dexie';
+import { db, ContactRecord, MessageRecord } from '@/lib/db';
 import { http } from './http';
+import { socketService } from './socket';
+import { beginHydration, endHydration, ingestChats, ingestMessages } from './ingest';
 import { useSyncStore } from '@/stores/syncStore';
 import { useChatStore } from '@/stores/chatStore';
-import { serverChatToRecord, serverMessageToRecord } from './actionHandler';
+import { useMessageStore } from '@/stores/messageStore';
+import { useContactStore } from '@/stores/contactStore';
 
-// ─── Full Sync ─────────────────────────────────────────
+/** Messages per history page, and per tail refresh. */
+export const PAGE_SIZE = 50;
+/** Messages read into memory when a chat is opened. */
+const HYDRATE_LIMIT = 80;
 
-export async function runFullSync() {
-  const syncStore = useSyncStore.getState();
-  syncStore.setStatus('syncing');
-  syncStore.setProgress(0, 'Counting chats...');
+const CATCH_UP_BATCH = 200;
+/** Past this many missed messages we stop replaying and re-seed chats on demand instead. */
+const CATCH_UP_MAX = 4000;
+const CHAT_PAGE_SIZE = 200;
+/** How many of the most recent chats a routine refresh re-reads. */
+const RECENT_CHATS = 50;
+/** A chat's tail isn't re-fetched if it was fetched this recently. */
+const TAIL_FRESH_MS = 15_000;
+const SWEEP_INTERVAL_MS = 60_000;
+const RESYNC_THROTTLE_MS = 5_000;
+const PREWARM_CHATS = 20;
 
-  try {
-    // 1. Get chat count
-    const countRes = await http.chatCount();
-    const totalChats = countRes?.data?.total ?? 0;
-    let processedChats = 0;
+const CURSOR_KEY = 'rowCursor';
+const CHATS_SYNCED_KEY = 'allChatsSynced';
 
-    // 2. Fetch chats in pages
-    const PAGE_SIZE = 200;
-    for (let offset = 0; offset < totalChats || offset === 0; offset += PAGE_SIZE) {
-      const chatRes = await http.queryChats({
+const CATCH_UP_WITH = ['chats', 'attachments', 'attachment.metadata', 'attributedBody', 'messageSummaryInfo', 'payloadData'];
+
+// ─── Catch-up ──────────────────────────────────────────
+
+let catchUpInFlight: Promise<void> | null = null;
+
+/** Ingest every message the server has stored since the cursor. Safe to call at any time. */
+export function catchUp(): Promise<void> {
+  if (catchUpInFlight) return catchUpInFlight;
+  const run: Promise<void> = runCatchUp()
+    .catch((err) => console.error('[Sync] Catch-up failed:', err))
+    .finally(() => {
+      if (catchUpInFlight === run) catchUpInFlight = null;
+    });
+  catchUpInFlight = run;
+  return run;
+}
+
+async function runCatchUp() {
+  const cursor = await db.getMeta<number>(CURSOR_KEY);
+  if (cursor === undefined) {
+    await establishCursor();
+    return;
+  }
+
+  let maxRowId = cursor;
+  let offset = 0;
+  for (;;) {
+    const res = await http.queryMessages({
+      withQuery: CATCH_UP_WITH,
+      where: [{ statement: 'message.ROWID > :rowId', args: { rowId: cursor } }],
+      sort: 'ASC',
+      offset,
+      limit: CATCH_UP_BATCH,
+    });
+    const batch: any[] = res?.data ?? [];
+
+    if (offset === 0 && (res?.metadata?.total ?? 0) > CATCH_UP_MAX) {
+      console.warn(`[Sync] ${res.metadata.total} messages behind; re-seeding instead of replaying`);
+      await resetCoverage();
+      return;
+    }
+
+    if (batch.length > 0) {
+      await ingestMessages(batch, { live: true });
+      for (const msg of batch) maxRowId = Math.max(maxRowId, msg.originalROWID ?? 0);
+    }
+    if (batch.length < CATCH_UP_BATCH) break;
+    offset += batch.length;
+  }
+
+  if (maxRowId > cursor) await db.setMeta(CURSOR_KEY, maxRowId);
+  useSyncStore.getState().setLastIncrementalSync(Date.now());
+}
+
+/** Start the cursor at the newest message the server has, without ingesting history. */
+async function establishCursor() {
+  const res = await http.queryMessages({ withQuery: [], sort: 'DESC', limit: 25 });
+  const newest: any[] = res?.data ?? [];
+  const maxRowId = newest.reduce((max, msg) => Math.max(max, msg.originalROWID ?? 0), 0);
+  await db.setMeta(CURSOR_KEY, maxRowId);
+}
+
+/** Forget what we believed was complete; every chat re-seeds the next time it is opened. */
+async function resetCoverage() {
+  await db.chats.toCollection().modify((chat) => {
+    chat.syncedFrom = null;
+    chat.historyComplete = false;
+  });
+  tailFetchedAt.clear();
+  await establishCursor();
+
+  const active = useChatStore.getState().activeChatGuid;
+  useMessageStore.getState().clear();
+  if (active) await openChat(active);
+}
+
+// ─── Chat list ─────────────────────────────────────────
+
+let chatRefreshInFlight: Promise<void> | null = null;
+
+/** Refresh the chat list from the server: the most recent page, or all of it. */
+export function refreshChats(scope: 'recent' | 'all' = 'recent'): Promise<void> {
+  if (scope === 'recent' && chatRefreshInFlight) return chatRefreshInFlight;
+
+  const run = (async () => {
+    const limit = scope === 'recent' ? RECENT_CHATS : CHAT_PAGE_SIZE;
+    for (let offset = 0; ; offset += limit) {
+      const res = await http.queryChats({
         withQuery: ['lastmessage', 'participants'],
         sort: 'lastmessage',
         offset,
-        limit: PAGE_SIZE,
+        limit,
       });
-
-      const chats = chatRes?.data ?? [];
-      if (chats.length === 0) break;
-
-      // Convert and bulk-upsert chats
-      const chatRecords = chats.map(serverChatToRecord);
-      await db.chats.bulkPut(chatRecords);
-
-      // Upsert participants and handles
-      for (const chat of chats) {
-        if (chat.participants?.length) {
-          for (const p of chat.participants) {
-            await db.chatParticipants.put({
-              chatGuid: chat.guid,
-              handleAddress: p.address,
-            });
-            await db.handles.put({
-              address: p.address,
-              service: p.service ?? 'iMessage',
-              formattedAddress: p.formattedAddress ?? null,
-              country: p.country ?? null,
-              color: p.color ?? null,
-              contactId: p.contactId ?? null,
-              originalROWID: p.originalROWID ?? null,
-            });
-          }
-        }
-      }
-
-      processedChats += chats.length;
-      const pct = Math.min(50, Math.round((processedChats / Math.max(totalChats, 1)) * 50));
-      syncStore.setProgress(pct, `Syncing chats (${processedChats}/${totalChats})...`);
+      const chats: any[] = res?.data ?? [];
+      await ingestChats(chats);
+      if (scope === 'recent' || chats.length < limit) break;
     }
+    if (scope === 'all') await db.setMeta(CHATS_SYNCED_KEY, Date.now());
+  })()
+    .catch((err) => console.error('[Sync] Chat refresh failed:', err))
+    .finally(() => {
+      if (chatRefreshInFlight === run) chatRefreshInFlight = null;
+    });
 
-    // Update chat store
-    const allChats = await db.chats.orderBy('lastMessageDate').reverse().toArray();
-    useChatStore.getState().setChats(allChats);
+  chatRefreshInFlight = run;
+  return run;
+}
 
-    // 3. Fetch messages for each chat (recent 25 per chat)
-    const chatsToSync = allChats.slice(0, 50); // only recent 50 chats for speed
-    let syncedChatMessages = 0;
+// ─── Loading a chat ────────────────────────────────────
 
-    for (const chat of chatsToSync) {
-      try {
-        const msgRes = await http.chatMessages(chat.guid, {
-          limit: 25,
-          withQuery: 'attachment,handle,message.attributedBody,message.messageSummaryInfo,message.payloadData',
-        });
+async function readLocalMessages(chatGuid: string, from: number | null, before: number | null, limit: number) {
+  const lower = [chatGuid, from ?? Dexie.minKey];
+  const upper = [chatGuid, before ?? Dexie.maxKey];
+  const rows = await db.messages
+    .where('[chatGuid+dateCreated]')
+    .between(lower, upper, true, true)
+    .reverse()
+    .limit(limit)
+    .toArray();
+  return rows.reverse();
+}
 
-        const messages = msgRes?.data ?? [];
-        if (messages.length > 0) {
-          const msgRecords = messages.map(serverMessageToRecord);
-          await db.messages.bulkPut(msgRecords);
-
-          // Upsert attachments
-          for (const msg of messages) {
-            if (msg.attachments?.length) {
-              for (const att of msg.attachments) {
-                await db.attachments.put({
-                  guid: att.guid,
-                  messageGuid: msg.guid,
-                  uti: att.uti ?? null,
-                  mimeType: att.mimeType ?? null,
-                  transferName: att.transferName ?? null,
-                  totalBytes: att.totalBytes ?? null,
-                  height: att.height ?? null,
-                  width: att.width ?? null,
-                  hasLivePhoto: att.hasLivePhoto ?? false,
-                  webUrl: att.webUrl ?? null,
-                  metadata: att.metadata ?? null,
-                });
-              }
-            }
-          }
-        }
-      } catch (err) {
-        console.error(`[Sync] Failed to sync messages for ${chat.guid}:`, err);
-      }
-
-      syncedChatMessages++;
-      const pct = 50 + Math.round((syncedChatMessages / chatsToSync.length) * 50);
-      syncStore.setProgress(pct, `Syncing messages (${syncedChatMessages}/${chatsToSync.length} chats)...`);
-    }
-
-    // 4. Sync contacts
-    syncStore.setProgress(98, 'Syncing contacts...');
-    await syncContacts();
-
-    // Record sync state
-    const now = Date.now();
-    syncStore.setLastFullSync(now);
-    syncStore.setLastIncrementalSync(now);
-    syncStore.setStatus('complete');
-    syncStore.setProgress(100, 'Sync complete');
-
-    console.log('[Sync] Full sync complete');
-  } catch (err: any) {
-    console.error('[Sync] Full sync failed:', err);
-    syncStore.setStatus('error');
-    syncStore.setProgress(0, `Sync failed: ${err.message}`);
+/** Read a chat's newest messages from IndexedDB into memory. */
+async function hydrateChat(chatGuid: string) {
+  beginHydration(chatGuid);
+  try {
+    const chat = await db.chats.get(chatGuid);
+    const rows = await readLocalMessages(chatGuid, chat?.syncedFrom ?? null, null, HYDRATE_LIMIT);
+    useMessageStore.getState().hydrate(chatGuid, rows, {
+      historyComplete: !!chat?.historyComplete && rows.length < HYDRATE_LIMIT,
+      activeChatGuid: useChatStore.getState().activeChatGuid,
+    });
+  } finally {
+    endHydration(chatGuid);
   }
 }
 
-// ─── Incremental Sync ──────────────────────────────────
+/**
+ * Make a chat's messages available in memory. Resolves as soon as local data
+ * is loaded; the server is consulted in the background and only adds to it.
+ */
+export async function openChat(chatGuid: string): Promise<void> {
+  if (!useMessageStore.getState().slices[chatGuid]?.hydrated) {
+    await hydrateChat(chatGuid);
+  }
+  void refreshTail(chatGuid);
+}
 
-export async function runIncrementalSync() {
-  const syncStore = useSyncStore.getState();
-  const lastSync = syncStore.lastIncrementalSync;
-  if (!lastSync) {
-    // Need full sync first
-    return runFullSync();
+const tailFetchedAt = new Map<string, number>();
+const tailInFlight = new Map<string, Promise<void>>();
+
+/**
+ * Fetch a chat's newest page and fold it in. This seeds a chat we have never
+ * loaded, picks up status changes (delivered, read, edited, unsent) on recent
+ * messages, and proves the local copy is contiguous up to now.
+ */
+export function refreshTail(chatGuid: string, opts: { force?: boolean } = {}): Promise<void> {
+  const inFlight = tailInFlight.get(chatGuid);
+  if (inFlight) return inFlight;
+  if (!opts.force && Date.now() - (tailFetchedAt.get(chatGuid) ?? 0) < TAIL_FRESH_MS) {
+    return Promise.resolve();
   }
 
-  try {
-    const now = Date.now();
-    const msgRes = await http.queryMessages({
-      withQuery: ['chats', 'chats.participants', 'attachments', 'attributedBody', 'messageSummaryInfo', 'payloadData'],
-      sort: 'DESC',
-      after: lastSync,
-      before: now,
-      limit: 1000,
+  const run: Promise<void> = runRefreshTail(chatGuid)
+    .catch((err) => console.error(`[Sync] Tail refresh failed for ${chatGuid}:`, err))
+    .finally(() => {
+      if (tailInFlight.get(chatGuid) === run) tailInFlight.delete(chatGuid);
     });
+  tailInFlight.set(chatGuid, run);
+  return run;
+}
 
-    const messages = msgRes?.data ?? [];
-    if (messages.length > 0) {
-      const msgRecords = messages.map(serverMessageToRecord);
-      await db.messages.bulkPut(msgRecords);
+async function runRefreshTail(chatGuid: string) {
+  const res = await http.chatMessages(chatGuid, { limit: PAGE_SIZE });
+  const raw: any[] = res?.data ?? [];
+  const { messages, newGuids } = await ingestMessages(raw, { chatGuid, allowOlder: true });
+  tailFetchedAt.set(chatGuid, Date.now());
 
-      // Update chats from message data
-      const chatGuids = new Set<string>();
-      for (const msg of messages) {
-        if (msg.chats?.length) {
-          for (const chat of msg.chats) {
-            if (!chatGuids.has(chat.guid)) {
-              chatGuids.add(chat.guid);
-              const chatRecord = serverChatToRecord(chat);
-              await db.chats.put(chatRecord);
-            }
-          }
-        }
-      }
+  const chat = await db.chats.get(chatGuid);
+  if (!chat) return;
 
-      // Refresh chat store
-      const allChats = await db.chats.orderBy('lastMessageDate').reverse().toArray();
-      useChatStore.getState().setChats(allChats);
-    }
+  const pageIsFull = raw.length >= PAGE_SIZE;
+  const pageOldest = messages.reduce((min, m) => Math.min(min, m.dateCreated), Infinity);
+  const overlapsLocal = messages.some((m) => !newGuids.has(m.guid));
 
-    syncStore.setLastIncrementalSync(now);
-    console.log(`[Sync] Incremental sync complete: ${messages.length} messages`);
-  } catch (err) {
-    console.error('[Sync] Incremental sync failed:', err);
+  let syncedFrom = chat.syncedFrom ?? null;
+  let historyComplete = chat.historyComplete ?? false;
+  let coverageShrank = false;
+
+  if (messages.length === 0) {
+    syncedFrom ??= 0;
+    historyComplete = true;
+  } else if (syncedFrom === null) {
+    syncedFrom = pageOldest;
+    historyComplete = !pageIsFull;
+  } else if (!overlapsLocal && pageIsFull && pageOldest > syncedFrom) {
+    // Nothing on the page was known locally, so messages may be missing
+    // between what we had and this page. Trust only the page.
+    syncedFrom = pageOldest;
+    historyComplete = false;
+    coverageShrank = true;
+  } else {
+    syncedFrom = Math.min(syncedFrom, pageOldest);
+    if (!pageIsFull) historyComplete = true;
   }
+
+  if (syncedFrom !== (chat.syncedFrom ?? null) || historyComplete !== (chat.historyComplete ?? false)) {
+    await db.chats.update(chatGuid, { syncedFrom, historyComplete });
+  }
+
+  const slice = useMessageStore.getState().slices[chatGuid];
+  if (!slice?.hydrated) return;
+  // Memory may hold messages from before the range we can now vouch for
+  const holdsUncovered = slice.messages.length > 0 && slice.messages[0].dateCreated < syncedFrom;
+  if (coverageShrank || holdsUncovered) {
+    await hydrateChat(chatGuid);
+  } else if (historyComplete && messages.length < PAGE_SIZE && slice.messages.length < HYDRATE_LIMIT) {
+    useMessageStore.getState().setHistoryComplete(chatGuid, true);
+  }
+}
+
+const olderInFlight = new Map<string, Promise<void>>();
+
+/** Load the page of messages before the oldest one in memory. */
+export function loadOlder(chatGuid: string): Promise<void> {
+  const inFlight = olderInFlight.get(chatGuid);
+  if (inFlight) return inFlight;
+
+  const slice = useMessageStore.getState().slices[chatGuid];
+  if (!slice?.hydrated || slice.historyComplete || slice.messages.length === 0) return Promise.resolve();
+
+  useMessageStore.getState().setLoadingOlder(chatGuid, true);
+  const run: Promise<void> = runLoadOlder(chatGuid, slice.messages[0])
+    .catch((err) => console.error(`[Sync] Loading older messages failed for ${chatGuid}:`, err))
+    .finally(() => {
+      if (olderInFlight.get(chatGuid) === run) olderInFlight.delete(chatGuid);
+      useMessageStore.getState().setLoadingOlder(chatGuid, false);
+    });
+  olderInFlight.set(chatGuid, run);
+  return run;
+}
+
+async function runLoadOlder(chatGuid: string, oldest: MessageRecord) {
+  const store = useMessageStore.getState();
+  const chat = await db.chats.get(chatGuid);
+  const syncedFrom = chat?.syncedFrom ?? null;
+
+  // Until the tail has been fetched we can't tell where local coverage starts
+  if (syncedFrom === null) {
+    await refreshTail(chatGuid, { force: true });
+    return;
+  }
+
+  // Anything inside the covered range is already local. The read includes the
+  // oldest message's own timestamp, so drop what memory already holds.
+  if (syncedFrom < oldest.dateCreated) {
+    const inMemory = new Set(store.slices[chatGuid]?.messages.map((m) => m.guid));
+    const local = (await readLocalMessages(chatGuid, syncedFrom, oldest.dateCreated, PAGE_SIZE + 5)).filter(
+      (m) => !inMemory.has(m.guid),
+    );
+    if (local.length > 0) {
+      store.mergeMessages(chatGuid, local, { allowOlder: true });
+      return;
+    }
+  }
+
+  if (chat?.historyComplete) {
+    store.setHistoryComplete(chatGuid, true);
+    return;
+  }
+
+  // `before` is inclusive on the server, so the page repeats the oldest message
+  const limit = PAGE_SIZE + 1;
+  const res = await http.chatMessages(chatGuid, { before: oldest.dateCreated, limit });
+  const raw: any[] = res?.data ?? [];
+  const { messages } = await ingestMessages(raw, { chatGuid, allowOlder: true });
+
+  const historyComplete = raw.length < limit;
+  const pageOldest = messages.reduce((min, m) => Math.min(min, m.dateCreated), oldest.dateCreated);
+  await db.chats.update(chatGuid, { syncedFrom: Math.min(syncedFrom, pageOldest), historyComplete });
+  if (historyComplete) store.setHistoryComplete(chatGuid, true);
+}
+
+/** Seed the most recent chats in the background so opening them needs no network. */
+async function prewarmChats() {
+  const candidates = useChatStore
+    .getState()
+    .chats.slice(0, PREWARM_CHATS)
+    .filter((chat) => chat.syncedFrom == null)
+    .map((chat) => chat.guid);
+
+  const worker = async () => {
+    for (let guid = candidates.shift(); guid; guid = candidates.shift()) {
+      await refreshTail(guid);
+    }
+  };
+  await Promise.all([worker(), worker()]);
+}
+
+// ─── Lifecycle ─────────────────────────────────────────
+
+let started = false;
+let firstSync: Promise<void> | null = null;
+let sweepTimer: ReturnType<typeof setInterval> | null = null;
+let lastResyncAt = 0;
+
+/** Bring everything up to date. Runs on reconnect, tab focus and coming back online. */
+export async function resync(): Promise<void> {
+  if (Date.now() - lastResyncAt < RESYNC_THROTTLE_MS) return;
+  lastResyncAt = Date.now();
+
+  const active = useChatStore.getState().activeChatGuid;
+  await Promise.all([
+    catchUp(),
+    refreshChats('recent'),
+    active ? refreshTail(active, { force: true }) : Promise.resolve(),
+  ]);
+}
+
+function onConnect() {
+  void resync();
+}
+
+function onVisible() {
+  if (document.visibilityState !== 'visible') return;
+  socketService.ensureConnected();
+  void resync();
+}
+
+function onOnline() {
+  socketService.ensureConnected();
+  void resync();
+}
+
+/**
+ * Start keeping the app in sync. Call once the HTTP service and socket are
+ * configured; calling it again is a no-op.
+ */
+export function startSync(): Promise<void> {
+  if (started || typeof window === 'undefined') return firstSync ?? Promise.resolve();
+  started = true;
+
+  socketService.on('connect', onConnect);
+  document.addEventListener('visibilitychange', onVisible);
+  window.addEventListener('online', onOnline);
+  // The sweep covers a socket that has gone quiet without disconnecting. It runs
+  // in background tabs too, so unread state is right when the user looks over.
+  sweepTimer = setInterval(() => void catchUp(), SWEEP_INTERVAL_MS);
+
+  firstSync = resync();
+  void (async () => {
+    await firstSync;
+    void prewarmChats();
+    const allChatsSynced = await db.getMeta<number>(CHATS_SYNCED_KEY);
+    if (!allChatsSynced) await refreshChats('all');
+    await syncContacts();
+    await useContactStore.getState().loadContacts();
+  })();
+  return firstSync;
+}
+
+/** Stop syncing and forget all in-memory sync state (sign-out). */
+export function stopSync() {
+  if (started) {
+    socketService.off('connect', onConnect);
+    document.removeEventListener('visibilitychange', onVisible);
+    window.removeEventListener('online', onOnline);
+  }
+  started = false;
+  if (sweepTimer) clearInterval(sweepTimer);
+  sweepTimer = null;
+  firstSync = null;
+  lastResyncAt = 0;
+  // Requests still in the air belong to the session being left
+  catchUpInFlight = null;
+  chatRefreshInFlight = null;
+  tailInFlight.clear();
+  olderInFlight.clear();
+  tailFetchedAt.clear();
 }
 
 // ─── Contact Sync ──────────────────────────────────────

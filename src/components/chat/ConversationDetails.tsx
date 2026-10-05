@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
+import Dexie from "dexie";
 import { db, AttachmentRecord, ChatRecord } from "@/lib/db";
 import { http } from "@/services/http";
 import { useContactStore } from "@/stores/contactStore";
@@ -14,7 +15,7 @@ interface ConversationDetailsProps {
 }
 
 export function ConversationDetails({ chat, onClose }: ConversationDetailsProps) {
-  const { resolveDisplayName } = useContactStore();
+  const resolveDisplayName = useContactStore((s) => s.resolveDisplayName);
   const [sharedMedia, setSharedMedia] = useState<AttachmentRecord[]>([]);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [addAddress, setAddAddress] = useState("");
@@ -72,19 +73,18 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
   useEffect(() => {
     const loadMedia = async () => {
       try {
-        // Get messages for this chat that have attachments
-        const msgs = await db.messages
-          .where("chatGuid").equals(chat.guid)
-          .filter(m => m.hasAttachments)
-          .toArray();
-
-        const msgGuids = msgs.map(m => m.guid);
-        if (msgGuids.length === 0) return;
-
-        const attachments = await db.attachments
-          .where("messageGuid").anyOf(msgGuids)
-          .filter(a => !!a.mimeType && (a.mimeType.startsWith("image/") || a.mimeType.startsWith("video/")))
-          .toArray();
+        // Newest messages first; stop once there's enough media to show
+        const attachments: AttachmentRecord[] = [];
+        await db.messages
+          .where("[chatGuid+dateCreated]")
+          .between([chat.guid, Dexie.minKey], [chat.guid, Dexie.maxKey])
+          .reverse()
+          .until(() => attachments.length >= 30)
+          .each((m) => {
+            for (const a of m.attachments ?? []) {
+              if (a.mimeType?.startsWith("image/") || a.mimeType?.startsWith("video/")) attachments.push(a);
+            }
+          });
 
         setSharedMedia(attachments.slice(0, 30)); // Limit to 30 for perf
       } catch (e) {
@@ -94,16 +94,29 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
     loadMedia();
   }, [chat.guid]);
 
-  // Load thumbnails as they come in
+  // Load thumbnails, and hand them back when the panel closes
   useEffect(() => {
+    let alive = true;
+    const acquired: string[] = [];
     for (const att of sharedMedia) {
-      if (!mediaUrls[att.guid]) {
-        downloadService.getAttachmentUrl(att.guid).then(url => {
-          setMediaUrls(prev => ({ ...prev, [att.guid]: url }));
-        }).catch(() => {});
-      }
+      if (att.mimeType?.startsWith("video/")) continue;
+      downloadService
+        .acquire(att.guid, "thumb")
+        .then((url) => {
+          if (!alive) {
+            downloadService.release(att.guid, "thumb");
+            return;
+          }
+          acquired.push(att.guid);
+          setMediaUrls((prev) => ({ ...prev, [att.guid]: url }));
+        })
+        .catch(() => {});
     }
-  }, [sharedMedia, mediaUrls]);
+    return () => {
+      alive = false;
+      for (const guid of acquired) downloadService.release(guid, "thumb");
+    };
+  }, [sharedMedia]);
 
   const handleRename = async () => {
     if (!renameText.trim()) return;
@@ -130,7 +143,7 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
       const res = await http.singleChat(chat.guid, "participants");
       if (res?.data) {
         const updated = { ...chat, participantHandleAddresses: res.data.participants?.map((p: any) => p.address) ?? chat.participantHandleAddresses };
-        await db.chats.put(updated);
+        await db.chats.update(chat.guid, { participantHandleAddresses: updated.participantHandleAddresses });
         useChatStore.getState().upsertChat(updated);
       }
     } catch (e: any) {
@@ -148,7 +161,7 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
       const res = await http.singleChat(chat.guid, "participants");
       if (res?.data) {
         const updated = { ...chat, participantHandleAddresses: res.data.participants?.map((p: any) => p.address) ?? chat.participantHandleAddresses };
-        await db.chats.put(updated);
+        await db.chats.update(chat.guid, { participantHandleAddresses: updated.participantHandleAddresses });
         useChatStore.getState().upsertChat(updated);
       }
     } catch (e: any) {
@@ -274,12 +287,13 @@ export function ConversationDetails({ chat, onClose }: ConversationDetailsProps)
           <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 4 }}>
             {sharedMedia.map(att => (
               <div key={att.guid} style={{ width: "100%", aspectRatio: "1", borderRadius: 6, overflow: "hidden", backgroundColor: "rgba(255,255,255,0.05)" }}>
-                {mediaUrls[att.guid] ? (
-                  att.mimeType?.startsWith("video/") ? (
-                    <video src={mediaUrls[att.guid]} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  ) : (
-                    <img src={mediaUrls[att.guid]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                  )
+                {att.mimeType?.startsWith("video/") ? (
+                  <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--muted)" }}>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="6 4 20 12 6 20 6 4" /></svg>
+                  </div>
+                ) : mediaUrls[att.guid] ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={mediaUrls[att.guid]} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 ) : (
                   <div style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     <span className="loading-spinner" style={{ width: 16, height: 16 }} />

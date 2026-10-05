@@ -32,9 +32,8 @@ describe('BlueBubblesDB', () => {
     expect(db.chats).toBeDefined();
     expect(db.messages).toBeDefined();
     expect(db.handles).toBeDefined();
-    expect(db.attachments).toBeDefined();
     expect(db.contacts).toBeDefined();
-    expect(db.chatParticipants).toBeDefined();
+    expect(db.meta).toBeDefined();
     expect(db.drafts).toBeDefined();
   });
 

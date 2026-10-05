@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 import { db, MessageRecord } from "@/lib/db";
 import { http } from "@/services/http";
-import { serverMessageToRecord } from "@/services/actionHandler";
+import { serverMessageToRecord } from "@/services/records";
 import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 
@@ -33,7 +33,7 @@ export function SearchPanel({ onClose }: { onClose: () => void }) {
            ],
            limit: 50
         });
-        const serverMsgs = (res?.data || []).map(serverMessageToRecord);
+        const serverMsgs = (res?.data || []).map((m: any) => serverMessageToRecord(m));
         setResults(serverMsgs);
       }
     } catch (err: any) {

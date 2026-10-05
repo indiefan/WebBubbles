@@ -16,20 +16,19 @@ interface ReplyPreviewProps {
 }
 
 export function ReplyPreview({ threadOriginatorGuid, variant, onDismiss, message }: ReplyPreviewProps) {
-  const [original, setOriginal] = useState<MessageRecord | null>(message ?? null);
-  const { resolveDisplayName } = useContactStore();
+  const [looked, setLooked] = useState<MessageRecord | null>(null);
+  const resolveDisplayName = useContactStore((s) => s.resolveDisplayName);
+  const original = message ?? looked;
 
   useEffect(() => {
     if (message) return; // already have it
     let cancelled = false;
 
-    // The threadOriginatorGuid can be bare "GUID" or "p:N/GUID"
-    const rawGuid = threadOriginatorGuid.includes("/")
-      ? threadOriginatorGuid.split("/").slice(1).join("/")
-      : threadOriginatorGuid;
+    // The threadOriginatorGuid can be bare "GUID", "p:N/GUID" or "bp:GUID"
+    const rawGuid = threadOriginatorGuid.replace(/^(p:\d+\/|bp:)/, "");
 
     db.messages.get(rawGuid).then((msg) => {
-      if (!cancelled && msg) setOriginal(msg);
+      if (!cancelled && msg) setLooked(msg);
     });
 
     return () => { cancelled = true; };

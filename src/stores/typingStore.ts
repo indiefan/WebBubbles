@@ -12,6 +12,8 @@ interface TypingState {
   clearTyping: (chatGuid: string) => void;
 }
 
+export const TYPING_TIMEOUT_MS = 30_000;
+
 // Track auto-clear timers outside the store to avoid serialization issues
 const clearTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -23,7 +25,7 @@ export const useTypingStore = create<TypingState>((set) => ({
     const existing = clearTimers.get(chatGuid);
     if (existing) clearTimeout(existing);
 
-    // Set new auto-clear timer (5 seconds)
+    // Auto-clear in case the "stopped typing" event never arrives
     const timer = setTimeout(() => {
       clearTimers.delete(chatGuid);
       set((s) => {
@@ -31,7 +33,7 @@ export const useTypingStore = create<TypingState>((set) => ({
         delete next[chatGuid];
         return { typingByChatGuid: next };
       });
-    }, 5000);
+    }, TYPING_TIMEOUT_MS);
     clearTimers.set(chatGuid, timer);
 
     set((s) => ({

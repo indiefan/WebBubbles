@@ -1,189 +1,208 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, use } from "react";
-import { useMessageStore } from "@/stores/messageStore";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, use } from "react";
+import { NO_MESSAGES, useMessageStore } from "@/stores/messageStore";
 import { useChatStore } from "@/stores/chatStore";
 import { useContactStore } from "@/stores/contactStore";
-import { db, MessageRecord } from "@/lib/db";
+import { MessageRecord } from "@/lib/db";
 import { http } from "@/services/http";
-import { serverMessageToRecord } from "@/services/actionHandler";
+import { loadOlder, openChat } from "@/services/sync";
+import { isReaction } from "@/services/records";
+import { buildReactionIndex, ReactionGroup } from "@/services/reactions";
 import { format, isToday, isYesterday } from "date-fns";
 import { ComposeArea } from "@/components/chat/ComposeArea";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationDetails } from "@/components/chat/ConversationDetails";
 import { chatIconCache } from "@/services/chatIconCache";
-
 import { TypingIndicator } from "@/components/chat/TypingIndicator";
+
+/** Within this distance of the newest message the view follows new arrivals. */
+const STICK_TO_BOTTOM_PX = 150;
+/** Within this distance of the oldest loaded message the next page is fetched. */
+const LOAD_OLDER_PX = 800;
+
+function formatDateSeparator(ts: number) {
+  const date = new Date(ts);
+  if (isToday(date)) return "Today";
+  if (isYesterday(date)) return "Yesterday";
+  return format(date, "MMMM d, yyyy");
+}
 
 export default function MessageView({ params }: { params: Promise<{ guid: string }> }) {
   const { guid: rawGuid } = use(params);
   const guid = decodeURIComponent(rawGuid);
 
-  const messages = useMessageStore((s) => s.slices[guid]?.messages ?? []);
-  const loading = useMessageStore((s) => s.slices[guid]?.loading ?? false);
-  const { setMessages, setLoading, setHasMore } = useMessageStore.getState();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messageListRef = useRef<HTMLDivElement>(null);
-  const isNearBottomRef = useRef(true);
-  const isInitialLoadRef = useRef(true);
+  const slice = useMessageStore((s) => s.slices[guid]);
+  const hydrated = slice?.hydrated ?? false;
+  const messages = hydrated ? slice.messages : NO_MESSAGES;
+  const pending = slice?.pending ?? NO_MESSAGES;
+  const historyComplete = slice?.historyComplete ?? false;
+  const loadingOlder = slice?.loadingOlder ?? false;
+
+  const chat = useChatStore((s) => s.chats.find((c) => c.guid === guid));
+  // Subscribing to the contact maps re-renders names once contacts finish loading
+  const contacts = useContactStore((s) => s.contacts);
+  const handles = useContactStore((s) => s.handles);
+  const { resolveChatDisplayName, resolveDisplayName } = useContactStore.getState();
+
+  const listRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
   const [showDetails, setShowDetails] = useState(false);
   const [chatIconUrl, setChatIconUrl] = useState<string | null>(null);
 
-  // ─── Sticky auto-scroll ──────────────────────────────
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
+  const chatTitle = chat ? resolveChatDisplayName(chat) : guid;
+  const isGroupChat = !!chat && (chat.participantHandleAddresses?.length ?? 0) > 1;
 
-  // Track if user has scrolled up
-  const handleScroll = useCallback(() => {
-    const el = messageListRef.current;
-    if (!el) return;
-    // "Near bottom" = within 150px of the bottom
-    const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    isNearBottomRef.current = distFromBottom < 150;
-  }, []);
+  // ─── Loading ─────────────────────────────────────────
 
-  // Auto-scroll when messages change (only if near bottom and NOT initial load)
-  useEffect(() => {
-    if (isInitialLoadRef.current) return; // skip — initial load handles its own scroll
-    if (isNearBottomRef.current && messages.length > 0) {
-      requestAnimationFrame(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      });
-    }
-  }, [messages]);
-
-  // Set active chat
+  // Local messages show at once; the server only adds to them afterwards
   useEffect(() => {
     useChatStore.getState().setActiveChatGuid(guid);
-    useChatStore.getState().markChatRead(guid);
-    http.markChatRead(guid).catch(() => {});
+    void openChat(guid);
 
     return () => {
       useChatStore.getState().setActiveChatGuid(null);
+      useMessageStore.getState().trim(guid);
     };
   }, [guid]);
+
+  // Mark the chat read when it is opened, and again as messages arrive while it is on screen
+  const newestIncomingGuid = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (!messages[i].isFromMe) return messages[i].guid;
+    }
+    return null;
+  }, [messages]);
+
+  const readStateRef = useRef<{ guid: string; incoming: string | null; settled: boolean } | null>(null);
+  useEffect(() => {
+    const markRead = () => {
+      if (document.visibilityState !== "visible") return;
+      useChatStore.getState().markChatRead(guid);
+      http.markChatRead(guid).catch(() => {});
+    };
+
+    const state = readStateRef.current;
+    if (!state || state.guid !== guid) {
+      // Opening the chat reads it
+      readStateRef.current = { guid, incoming: newestIncomingGuid, settled: hydrated };
+      markRead();
+    } else if (!state.settled) {
+      // Local messages appearing isn't news; only what arrives after that is
+      if (hydrated) {
+        state.incoming = newestIncomingGuid;
+        state.settled = true;
+      }
+    } else if (newestIncomingGuid && newestIncomingGuid !== state.incoming) {
+      state.incoming = newestIncomingGuid;
+      markRead();
+    }
+
+    document.addEventListener("visibilitychange", markRead);
+    return () => document.removeEventListener("visibilitychange", markRead);
+  }, [guid, hydrated, newestIncomingGuid]);
 
   // Load chat icon
+  const hasCustomIcon = !!chat?.customAvatarPath;
   useEffect(() => {
     setChatIconUrl(null);
-    const chat = useChatStore.getState().chats.find(c => c.guid === guid);
-    if (chat?.customAvatarPath) {
-      chatIconCache.getChatIconUrl(guid).then(url => setChatIconUrl(url));
+    if (hasCustomIcon) {
+      chatIconCache.getChatIconUrl(guid).then((url) => setChatIconUrl(url));
     }
+  }, [guid, hasCustomIcon]);
+
+  // ─── Scrolling ───────────────────────────────────────
+  //
+  // The list is a column-reverse scroller: scrollTop is 0 at the newest message
+  // and grows negative going back in time. It therefore opens at the bottom,
+  // stays there as content arrives, and doesn't move when history is prepended.
+
+  const handleScroll = useCallback(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const fromBottom = Math.abs(el.scrollTop);
+    atBottomRef.current = fromBottom < STICK_TO_BOTTOM_PX;
+
+    const fromTop = el.scrollHeight - el.clientHeight - fromBottom;
+    if (fromTop < LOAD_OLDER_PX) void loadOlder(guid);
   }, [guid]);
 
-  // Load messages
-  useEffect(() => {
-    isNearBottomRef.current = true;
-    isInitialLoadRef.current = true;
-
-    const load = async () => {
-      setLoading(guid, true);
-      try {
-        // Try IndexedDB first (sorted ASC — oldest first)
-        const cached = await db.messages
-          .where("[chatGuid+dateCreated]")
-          .between([guid, -Infinity], [guid, Infinity])
-          .reverse()
-          .limit(50)
-          .toArray();
-        cached.reverse(); // back to ASC (oldest-first) for rendering
-
-        if (cached.length > 0) {
-          setMessages(guid, cached);
-        }
-
-        // Then fetch fresh from server (API returns DESC, we reverse to ASC)
-        const res = await http.chatMessages(guid, { limit: 50 });
-        const serverMsgs: MessageRecord[] = (res?.data || []).map(serverMessageToRecord);
-        serverMsgs.reverse(); // oldest first
-
-        if (serverMsgs.length > 0) {
-          await db.messages.bulkPut(serverMsgs);
-          setMessages(guid, serverMsgs);
-          setHasMore(guid, serverMsgs.length >= 50);
-        } else {
-          setHasMore(guid, false);
-        }
-      } catch (err) {
-        console.error("[MessageView] Failed to load messages:", err);
-      } finally {
-        setLoading(guid, false);
-        // Instant scroll on initial load (no animation)
-        requestAnimationFrame(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
-          // Allow smooth scrolling for future new messages
-          isInitialLoadRef.current = false;
-        });
-      }
-    };
-
-    load();
-  }, [guid, setMessages, setLoading, setHasMore]);
-
-  const formatDateSeparator = (ts: number) => {
-    const date = new Date(ts);
-    if (isToday(date)) return "Today";
-    if (isYesterday(date)) return "Yesterday";
-    return format(date, "MMMM d, yyyy");
-  };
-
-  const formatTime = (ts: number) => {
-    return format(new Date(ts), "h:mm a");
-  };
-
-  // Group messages by date
-  const renderMessages = () => {
-    if (messages.length === 0) {
-      return (
-        <div className="empty-state" style={{ padding: 24 }}>
-          <p style={{ color: "var(--muted)" }}>No messages yet</p>
-        </div>
-      );
+  // When the user is reading back and something lands below them, hold their place
+  const newestKey = pending.length > 0 ? pending[pending.length - 1].guid : messages[messages.length - 1]?.guid;
+  const anchorRef = useRef<{ guid: string; newestKey?: string; height: number }>({ guid, height: 0 });
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const prev = anchorRef.current;
+    const height = el.scrollHeight;
+    if (prev.guid === guid && prev.newestKey !== newestKey && prev.height > 0) {
+      if (atBottomRef.current) el.scrollTop = 0;
+      else el.scrollTop -= height - prev.height;
     }
+    anchorRef.current = { guid, newestKey, height };
+  }, [guid, newestKey, messages, pending]);
 
+  // A chat with less than a screenful loaded needs its history fetched without a scroll
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el || !hydrated || historyComplete || loadingOlder || messages.length === 0) return;
+    if (el.scrollHeight <= el.clientHeight + LOAD_OLDER_PX) void loadOlder(guid);
+  }, [guid, hydrated, historyComplete, loadingOlder, messages.length]);
+
+  const handleSend = useCallback(() => {
+    atBottomRef.current = true;
+    if (listRef.current) listRef.current.scrollTop = 0;
+  }, []);
+
+  // ─── Rendering ───────────────────────────────────────
+
+  const reactionIndexRef = useRef<Map<string, ReactionGroup[]>>(new Map());
+  const reactionIndex = useMemo(() => {
+    reactionIndexRef.current = buildReactionIndex(messages, reactionIndexRef.current);
+    return reactionIndexRef.current;
+  }, [messages]);
+
+  const byGuid = useMemo(() => {
+    const map = new Map<string, MessageRecord>();
+    for (const m of messages) map.set(m.guid, m);
+    return map;
+  }, [messages]);
+
+  const rows = useMemo(() => {
     const elements: React.ReactNode[] = [];
     let lastDate = "";
 
-    // Messages are sorted ASC (oldest first), rendered top-to-bottom
-    // Filter out reaction messages — they appear as badges on the original message
-    const displayMessages = messages.filter(msg => !msg.associatedMessageGuid);
-
-    for (let i = 0; i < displayMessages.length; i++) {
-      const msg = displayMessages[i];
+    // Reactions appear as badges on the message they target, not as rows
+    const visible = [...messages, ...pending].filter((m) => !isReaction(m));
+    for (const msg of visible) {
       const msgDate = formatDateSeparator(msg.dateCreated);
-
       if (msgDate !== lastDate) {
         elements.push(
-          <div key={`date-${msgDate}`} style={{ textAlign: "center", padding: "8px 0", color: "var(--muted)", fontSize: 12, fontWeight: 500 }}>
+          <div key={`date-${msgDate}`} className="message-date-separator">
             {msgDate}
-          </div>
+          </div>,
         );
         lastDate = msgDate;
       }
 
+      const replyGuid = msg.threadOriginatorGuid?.replace(/^(p:\d+\/|bp:)/, "");
       elements.push(
-        <MessageBubble key={msg.guid} msg={msg} isGroupChat={!!isGroupChat} chatGuid={guid} />
+        <MessageBubble
+          key={msg.tempGuid ?? msg.guid}
+          msg={msg}
+          chatGuid={guid}
+          senderName={isGroupChat && !msg.isFromMe && msg.handleAddress ? resolveDisplayName(msg.handleAddress) : null}
+          reactions={reactionIndex.get(msg.guid)}
+          replyTo={replyGuid ? byGuid.get(replyGuid) : undefined}
+        />,
       );
     }
-
     return elements;
-  };
+    // contacts/handles are listed so sender names refresh when they load
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, pending, guid, isGroupChat, reactionIndex, byGuid, contacts, handles]);
 
-  if (loading && messages.length === 0) {
-    return (
-      <div className="empty-state">
-        <span className="loading-spinner"></span>
-      </div>
-    );
-  }
-
-  // Get chat info
-  const chat = useChatStore.getState().chats.find((c) => c.guid === guid);
-  const { resolveChatDisplayName, resolveDisplayName } = useContactStore.getState();
-  const chatTitle = chat ? resolveChatDisplayName(chat) : guid;
-  const isGroupChat = chat && (chat.participantHandleAddresses?.length ?? 0) > 1;
+  const isEmpty = messages.length === 0 && pending.length === 0;
 
   return (
     <div style={{ display: "flex", height: "100%" }}>
@@ -204,18 +223,32 @@ export default function MessageView({ params }: { params: Promise<{ guid: string
           </button>
         </div>
 
-        <div className="message-list" ref={messageListRef} onScroll={handleScroll}>
-          {renderMessages()}
-          <TypingIndicator chatGuid={guid} isGroupChat={!!isGroupChat} />
-          <div ref={messagesEndRef} />
+        {/* Keyed by chat so each one starts at its newest message */}
+        <div key={`list:${guid}`} className="message-list" ref={listRef} onScroll={handleScroll}>
+          <div className="message-list-inner">
+            {!hydrated ? null : isEmpty ? (
+              <div className="empty-state" style={{ padding: 24 }}>
+                {historyComplete ? (
+                  <p style={{ color: "var(--muted)" }}>No messages yet</p>
+                ) : (
+                  <span className="loading-spinner"></span>
+                )}
+              </div>
+            ) : (
+              <>
+                {loadingOlder && (
+                  <div className="message-list-status">
+                    <span className="loading-spinner" style={{ width: 18, height: 18 }}></span>
+                  </div>
+                )}
+                {rows}
+              </>
+            )}
+            <TypingIndicator chatGuid={guid} isGroupChat={isGroupChat} />
+          </div>
         </div>
 
-        <ComposeArea 
-          chatGuid={guid} 
-          onSend={() => {
-            isNearBottomRef.current = true;
-          }} 
-        />
+        <ComposeArea key={`compose:${guid}`} chatGuid={guid} onSend={handleSend} />
       </div>
 
       {showDetails && chat && (

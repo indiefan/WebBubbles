@@ -59,7 +59,7 @@ describe('Full Sync Integration', () => {
     expect(chats).toHaveLength(3);
 
     // Step 3: Store chats in IndexedDB
-    const chatRecords = chats.map(serverChatToRecord);
+    const chatRecords = chats.map((c: any) => serverChatToRecord(c));
     await db.chats.bulkPut(chatRecords);
 
     const storedChats = await db.chats.orderBy('lastMessageDate').reverse().toArray();
@@ -69,7 +69,7 @@ describe('Full Sync Integration', () => {
     // Step 4: Fetch messages for each chat
     for (const chat of chatRecords) {
       const msgRes = await httpService.chatMessages(chat.guid, { limit: 5 });
-      const messages = (msgRes.data || []).map(serverMessageToRecord);
+      const messages = (msgRes.data || []).map((m: any) => serverMessageToRecord(m));
       await db.messages.bulkPut(messages);
     }
 
@@ -172,7 +172,7 @@ describe('Full Sync Integration', () => {
     expect(result.data).toHaveLength(2);
 
     // Store in DB
-    const records = result.data.map(serverMessageToRecord);
+    const records = result.data.map((m: any) => serverMessageToRecord(m));
     await db.messages.bulkPut(records);
 
     const stored = await db.messages.count();
@@ -257,10 +257,11 @@ describe('Full Sync Integration', () => {
     expect(count).toBe(100);
   });
 
-  it('new message event: handles tempGuid replacement when socket beats HTTP response', async () => {
-    // We must use the global db because actionHandler uses it directly
+  it('new message event: replaces the optimistic bubble when the socket beats the HTTP response', async () => {
+    // We must use the global db because the ingest path uses it directly
     const { db: globalDb } = await import('@/lib/db');
-    
+    const chatGuid = 'iMessage;-;+11234567890';
+
     const tempGuid = `temp-${Date.now()}-socket-race`;
     const optimistic = serverMessageToRecord(
       mockMessageData({
@@ -269,8 +270,8 @@ describe('Full Sync Integration', () => {
         isFromMe: true,
       }),
     );
-    await globalDb.messages.put(optimistic);
-    useMessageStore.getState().addMessage(optimistic.chatGuid, optimistic);
+    useMessageStore.getState().hydrate(chatGuid, []);
+    useMessageStore.getState().addPending(chatGuid, optimistic);
 
     const realGuid = `real-${tempGuid}`;
     const newMsgData = mockMessageData({
@@ -279,24 +280,25 @@ describe('Full Sync Integration', () => {
       isFromMe: true,
       dateCreated: Date.now(),
     });
-    // Add tempGuid to the payload
+    // The server echoes the temp guid the message was sent with
     (newMsgData as any).tempGuid = tempGuid;
 
     await handleNewMessage(newMsgData);
 
-    const deletedTemp = await globalDb.messages.get(tempGuid);
-    expect(deletedTemp).toBeUndefined();
+    // Optimistic messages never touch IndexedDB; only the confirmed one is stored
+    expect(await globalDb.messages.get(tempGuid)).toBeUndefined();
+    expect(await globalDb.messages.get(realGuid)).toBeDefined();
 
-    const realMsg = await globalDb.messages.get(realGuid);
-    expect(realMsg).toBeDefined();
+    const slice = useMessageStore.getState().slices[chatGuid];
+    expect(slice.pending).toHaveLength(0);
+    expect(slice.messages).toHaveLength(1);
+    expect(slice.messages[0].guid).toBe(realGuid);
+    // The confirmed message keeps the optimistic one's key so its bubble isn't remounted
+    expect(slice.messages[0].tempGuid).toBe(tempGuid);
 
-    const state = useMessageStore.getState();
-    const storeMsgs = (state.slices[optimistic.chatGuid]?.messages ?? []).filter(m => m.text === 'Optimistic socket race');
-    expect(storeMsgs).toHaveLength(1);
-    expect(storeMsgs[0].guid).toBe(realGuid);
-    
     // Cleanup
     useMessageStore.getState().clear();
     await globalDb.messages.delete(realGuid);
+    await globalDb.chats.delete(chatGuid);
   });
 });

@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { http } from "@/services/http";
 import { useChatStore } from "@/stores/chatStore";
+import { refreshChat } from "@/services/ingest";
 import { useRouter } from "next/navigation";
 
 export function NewChatModal({ onClose }: { onClose: () => void }) {
@@ -29,7 +30,9 @@ export function NewChatModal({ onClose }: { onClose: () => void }) {
       }
       
       if (guid || res?.data?.guid) {
-        let finalGuid = res?.data?.guid || guid;
+        const finalGuid = res?.data?.guid || guid;
+        // The new chat isn't in the list until the server is asked about it
+        void refreshChat(finalGuid);
         useChatStore.getState().setActiveChatGuid(finalGuid);
         router.push(`/chats/${encodeURIComponent(finalGuid)}`);
         onClose();
