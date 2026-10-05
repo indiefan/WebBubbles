@@ -74,6 +74,14 @@ describe('GET /api/dev-session', () => {
     expect(execFile).not.toHaveBeenCalled();
   });
 
+  it('prefers a server given in the environment over the keychain', async () => {
+    vi.stubEnv('BB_DEV_SERVER_URL', 'http://localhost:4010');
+    vi.stubEnv('BB_DEV_PASSWORD', 'fake');
+    const res = await GET(request());
+    expect(await res.json()).toEqual({ serverUrl: 'http://localhost:4010', password: 'fake' });
+    expect(execFile).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when the keychain has no saved sign-in', async () => {
     stubKeychain({ 'server-url': KEYCHAIN['server-url'] });
     const res = await GET(request());

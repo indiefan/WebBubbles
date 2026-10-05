@@ -74,12 +74,22 @@ This asks for the server password once and stores it in your login keychain. Fro
 
 The dev build is **read-only** against the server: it will not send messages, reactions, read receipts or typing indicators. Start it with `NEXT_PUBLIC_BB_DEV_ALLOW_WRITES=1 npm run dev` to lift that.
 
+#### Developing without a real server
+
+```bash
+npm run fake-server   # a stand-in BlueBubbles server with generated conversations
+npm run dev:fake      # the app on http://localhost:3001, signed in to it
+```
+
+The fake server also has `/__control` endpoints for scripting incoming messages, missed socket events and dropped connections; see the top of `scripts/fake-bluebubbles.mjs`.
+
 #### Available Scripts
 
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start dev server (Turbopack), bound to localhost |
 | `npm run dev:login` | Save a dev sign-in to the macOS keychain |
+| `npm run fake-server` / `npm run dev:fake` | Run against a fake BlueBubbles server |
 | `npm run typecheck` | TypeScript check |
 | `npm run build` | Production build |
 | `npm run start` | Start production server |

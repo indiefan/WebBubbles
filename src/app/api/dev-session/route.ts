@@ -37,10 +37,11 @@ export async function GET(request: Request) {
   const fetchSite = request.headers.get("sec-fetch-site");
   if (fetchSite && fetchSite !== "same-origin") return notFound();
 
-  const [serverUrl, password] = await Promise.all([
-    readKeychain("server-url"),
-    readKeychain("password"),
-  ]);
+  // An explicit server in the environment (e.g. the fake one) wins over the keychain
+  const fromEnv = process.env.BB_DEV_SERVER_URL && process.env.BB_DEV_PASSWORD;
+  const [serverUrl, password] = fromEnv
+    ? [process.env.BB_DEV_SERVER_URL, process.env.BB_DEV_PASSWORD]
+    : await Promise.all([readKeychain("server-url"), readKeychain("password")]);
   if (!serverUrl || !password) return notFound();
 
   return NextResponse.json(
