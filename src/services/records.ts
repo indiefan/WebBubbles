@@ -224,6 +224,8 @@ export function mergeChatRecord(existing: ChatRecord | undefined, incoming: Chat
     merged.lastMessageGuid = incoming.lastMessageGuid;
     merged.lastMessageDate = incoming.lastMessageDate;
     merged.lastMessageText = incoming.lastMessageText;
+    // Answered or read on another device
+    if (raw.lastMessage?.isFromMe || raw.lastMessage?.dateRead) merged.hasUnreadMessage = false;
   }
   return merged;
 }

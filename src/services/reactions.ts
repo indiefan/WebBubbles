@@ -42,9 +42,12 @@ export function parseReaction(msg: MessageRecord): ParsedReaction | null {
     const offset = num - (isRemoval ? 3000 : 2000);
     const name = REACTION_NAMES[offset];
     if (name) return { base: name, emoji: REACTION_EMOJI[name], isRemoval };
-    // 2006: any-emoji tapback. The emoji itself only appears in the message text.
+    // 2006: any-emoji tapback. The emoji itself only appears in the message
+    // text, as either "Reacted 😂 to “…”" or just "😂 to “…”" with the emoji
+    // wrapped in zero-width spaces.
     if (offset === 6) {
-      const emoji = msg.text?.match(/^(?:Reacted|Removed)\s+(\S+)/)?.[1];
+      const text = (msg.text ?? '').replace(/\u200B/g, '').trim();
+      const emoji = text.match(/^(?:(?:Reacted|Removed)\s+)?(\S+)\s+(?:to|from)\s/)?.[1];
       return emoji ? { base: `emoji:${emoji}`, emoji, isRemoval } : null;
     }
     return null;

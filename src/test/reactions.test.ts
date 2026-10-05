@@ -32,6 +32,10 @@ describe('reactions', () => {
     expect(parseReaction(reaction('m', 'laugh'))).toMatchObject({ emoji: '😂', isRemoval: false });
     expect(parseReaction(reaction('m', '-question'))).toMatchObject({ emoji: '❓', isRemoval: true });
     expect(parseReaction(reaction('m', 2006, { text: 'Reacted 🎉 to “hi”' }))).toMatchObject({ emoji: '🎉' });
+    // The same tapback also arrives without the verb, the emoji wrapped in zero-width spaces
+    expect(parseReaction(reaction('m', '2006', { text: '\u200B👍\u200B to “hi”' }))).toMatchObject({ emoji: '👍', isRemoval: false });
+    expect(parseReaction(reaction('m', 2006, { text: 'Reacted ☺️ to an image' }))).toMatchObject({ emoji: '☺️' });
+    expect(parseReaction(reaction('m', 3006, { text: 'Removed 🎉 from “hi”' }))).toMatchObject({ emoji: '🎉', isRemoval: true });
     expect(parseReaction(reaction('m', 1000))).toBeNull();
   });
 

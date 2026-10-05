@@ -306,6 +306,32 @@ describe('live messages', () => {
     expect((await db.chats.get(CHAT))?.hasUnreadMessage).toBe(false);
   });
 
+  it('clears the unread dot when I answer from another device', async () => {
+    server.addMessages(CHAT, 2);
+    await refreshChats();
+    await handleNewMessage(server.addMessage(CHAT, { text: 'are you there?' }));
+    expect((await db.chats.get(CHAT))?.hasUnreadMessage).toBe(true);
+
+    // My reply, sent from my phone, arrives like any other message
+    await handleNewMessage(server.addMessage(CHAT, { isFromMe: true, text: 'yes' }));
+
+    expect((await db.chats.get(CHAT))?.hasUnreadMessage).toBe(false);
+    expect(useChatStore.getState().chats[0].hasUnreadMessage).toBe(false);
+  });
+
+  it('leaves a chat read when catch-up brings a conversation I already answered', async () => {
+    server.addMessages(CHAT, 2);
+    await refreshChats();
+    await catchUp();
+
+    // Both sides of an exchange happened while this device was asleep
+    server.addMessage(CHAT, { text: 'question' });
+    server.addMessage(CHAT, { isFromMe: true, text: 'answer' });
+    await catchUp();
+
+    expect((await db.chats.get(CHAT))?.hasUnreadMessage).toBe(false);
+  });
+
   it('adds a conversation the app has never seen', async () => {
     const msg = server.addMessage(OTHER_CHAT, { text: 'new here', handle: '+15550002' });
 

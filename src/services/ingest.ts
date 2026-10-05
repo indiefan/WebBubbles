@@ -144,12 +144,17 @@ export async function ingestMessages(rawMessages: any[], opts: IngestOptions = {
         updates.lastMessageText = preview;
       }
 
-      if (opts.live && !chat.hasUnreadMessage && !isOnScreen(chatGuid)) {
-        const lastReadAt = chat.lastReadAt ?? 0;
-        const hasUnread = msgs.some(
-          (m) => newGuids.has(m.guid) && countsAsUnread(m) && m.dateCreated > lastReadAt,
-        );
-        if (hasUnread) updates.hasUnreadMessage = true;
+      // Unread means "arrived since this device last showed the chat". The
+      // server's read flags only reflect the Mac itself, so they can clear a
+      // dot but never set one.
+      const isNewestInChat = newest.dateCreated >= (chat.lastMessageDate ?? 0);
+      if (chat.hasUnreadMessage) {
+        // Answered or read on another device
+        if (isNewestInChat && (newest.isFromMe || newest.dateRead)) updates.hasUnreadMessage = false;
+      } else if (opts.live && !isOnScreen(chatGuid) && isNewestInChat && countsAsUnread(newest)) {
+        if (newGuids.has(newest.guid) && newest.dateCreated > (chat.lastReadAt ?? 0)) {
+          updates.hasUnreadMessage = true;
+        }
       }
 
       if (!stored || Object.keys(updates).length > 0) {
