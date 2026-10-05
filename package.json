@@ -1,6 +1,6 @@
 {
   "name": "next-web",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "private": true,
   "scripts": {
     "dev": "BB_DEV_SESSION=1 next dev -H 127.0.0.1",
