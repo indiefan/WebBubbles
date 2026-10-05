@@ -44,7 +44,7 @@ export function SearchPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div style={{ position: 'absolute', top: 0, left: 320, width: '380px', height: '100%', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', borderRight: '1px solid var(--border)', zIndex: 10, display: 'flex', flexDirection: 'column', boxShadow: '5px 0 15px rgba(0,0,0,0.5)' }}>
+    <div style={{ position: 'absolute', top: 0, left: 'var(--sidebar-width, 320px)', width: '380px', height: '100%', backgroundColor: 'var(--bg-secondary)', borderLeft: '1px solid var(--border)', borderRight: '1px solid var(--border)', zIndex: 10, display: 'flex', flexDirection: 'column', boxShadow: '5px 0 15px rgba(0,0,0,0.5)' }}>
       <div style={{ padding: 16, borderBottom: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: 12 }}>
         <h3 style={{ margin: 0, flex: 1 }}>Search Messages</h3>
         <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--muted)', cursor: 'pointer' }}>

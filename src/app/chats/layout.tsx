@@ -19,12 +19,28 @@ import { startSync, stopSync } from "@/services/sync";
 import { chatIconCache } from "@/services/chatIconCache";
 import { DEV_READ_ONLY } from "@/services/devSession";
 import { useAppUpdate } from "@/services/appUpdate";
-import { Avatar, AvatarPerson } from "@/components/Avatar";
+import { Avatar, ChatFace } from "@/components/Avatar";
+import { ChatRail, orderForRail } from "@/components/chat/ChatRail";
 import { ServerBanner, ServerPanel } from "@/components/ServerPanel";
 import { startServerMonitor, stopServerMonitor } from "@/services/serverStatus";
 import { deriveHealth, useServerStatusStore } from "@/stores/serverStatusStore";
 
 const CHAT_ROW_HEIGHT = 72;
+const SIDEBAR_WIDTH = 320;
+const SIDEBAR_COLLAPSED_WIDTH = 72;
+const COLLAPSED_KEY = "bb-sidebar-collapsed";
+
+function SidebarToggle({ collapsed, onClick }: { collapsed: boolean; onClick: () => void }) {
+  const label = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  return (
+    <button className="sidebar-toggle" onClick={onClick} title={label} aria-label={label} aria-expanded={!collapsed}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <rect x="3" y="4" width="18" height="16" rx="2" />
+        <line x1="9" y1="4" x2="9" y2="20" />
+      </svg>
+    </button>
+  );
+}
 const NO_FACE: ChatFace = { name: "", imageUrl: null };
 
 function sameFace(a: ChatFace, b: ChatFace): boolean {
@@ -41,14 +57,6 @@ function formatTime(ts: number | null) {
   } catch {
     return "";
   }
-}
-
-/** What a chat's avatar is drawn from. */
-interface ChatFace {
-  name: string;
-  imageUrl: string | null;
-  /** Members of a group, for when it has no photo of its own. */
-  members?: AvatarPerson[];
 }
 
 interface ChatRowProps {
@@ -118,6 +126,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const serverUnreachable = useServerStatusStore((s) => s.unreachable);
   const serverAction = useServerStatusStore((s) => s.action);
   const health = deriveHealth({ socketState, info: serverInfo, unreachable: serverUnreachable, action: serverAction });
+  const [collapsed, setCollapsed] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
   const [chatIconUrls, setChatIconUrls] = useState<Record<string, string>>({});
   // Re-rendered once a minute so relative times ("5 minutes") stay current
@@ -169,6 +178,26 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
     const timer = setInterval(() => setClock((n) => n + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
+
+  // The sidebar stays the way it was left. Read before first paint so a
+  // collapsed sidebar doesn't flash open on load.
+  useLayoutEffect(() => {
+    try {
+      setCollapsed(localStorage.getItem(COLLAPSED_KEY) === "1");
+    } catch {
+      // Storage unavailable: start expanded
+    }
+  }, []);
+
+  const toggleCollapsed = () => {
+    const next = !collapsed;
+    setCollapsed(next);
+    try {
+      localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
+    } catch {
+      // Not remembered, but still toggled
+    }
+  };
 
   // Find out which groups have a photo (remembered per chat, re-asked daily)
   const chatCount = chats.length;
@@ -234,6 +263,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
     [filteredChats],
   );
   const unpinned = useMemo(() => filteredChats.filter((c) => !c.isPinned), [filteredChats]);
+  // The collapsed sidebar has no search box, so it always shows every chat
+  const rail = useMemo(() => orderForRail(chats), [chats]);
 
   const openChat = useCallback(
     (chatGuid: string) => {
@@ -253,8 +284,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const rowsRef = useRef<HTMLDivElement>(null);
   const [rowsOffset, setRowsOffset] = useState(0);
   useLayoutEffect(() => {
-    setRowsOffset(rowsRef.current?.offsetTop ?? 0);
-  }, [pinned.length, loading]);
+    if (rowsRef.current) setRowsOffset(rowsRef.current.offsetTop);
+  }, [pinned.length, loading, collapsed]);
 
   // Rows are a fixed height, so positions depend only on the index. Nothing is
   // measured or cached per chat, which keeps reordering (a chat jumping to the
@@ -269,6 +300,7 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
 
   const activePath = pathname ?? "";
   const isActive = (chatGuid: string) => activePath === `/chats/${encodeURIComponent(chatGuid)}`;
+  const activeGuid = useMemo(() => chats.find((c) => activePath === `/chats/${encodeURIComponent(c.guid)}`)?.guid ?? null, [chats, activePath]);
 
   const handleLogout = async () => {
     stopSync();
@@ -294,11 +326,58 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   };
 
   return (
-    <div className="app-layout">
+    <div
+      className="app-layout"
+      style={{ "--sidebar-width": `${collapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_WIDTH}px` } as React.CSSProperties}
+    >
       {/* Sidebar */}
-      <div className="sidebar">
+      <div className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+        {collapsed ? (
+          <>
+            <div className="sidebar-rail-header">
+              <SidebarToggle collapsed onClick={toggleCollapsed} />
+            </div>
+            <ChatRail
+              chats={rail.ordered}
+              pinnedCount={rail.pinnedCount}
+              faces={faces}
+              iconUrls={chatIconUrls}
+              activeGuid={activeGuid}
+              loading={loading}
+              onOpen={openChat}
+              onContextMenu={openContextMenu}
+            />
+            <div className="sidebar-rail-footer">
+              {updateAvailable && (
+                <button
+                  className="sidebar-toggle sidebar-rail-update"
+                  onClick={() => window.location.reload()}
+                  title="A newer version is ready — reload"
+                  aria-label="Reload to update"
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="23 4 23 10 17 10" />
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                  </svg>
+                </button>
+              )}
+              <button
+                className="server-indicator"
+                onClick={() => setShowServer(true)}
+                title={`${health.summary} — server status`}
+                aria-label={`Server status: ${health.summary}`}
+              >
+                <span className={`status-dot status-dot-${health.level}`} />
+              </button>
+            </div>
+          </>
+        ) : (
+        <>
         <div className="sidebar-header">
           <h2 style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+            <span style={{ alignSelf: "center", display: "flex", marginLeft: -6 }}>
+              <SidebarToggle collapsed={false} onClick={toggleCollapsed} />
+            </span>
             Messages
             <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 400 }}>
               v{process.env.NEXT_PUBLIC_APP_VERSION || "dev"}
@@ -473,6 +552,8 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
             </>
           )}
         </div>
+        </>
+        )}
       </div>
 
       {/* Main */}

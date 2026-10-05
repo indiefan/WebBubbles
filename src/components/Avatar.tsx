@@ -7,6 +7,14 @@ export interface AvatarPerson {
   imageUrl?: string | null;
 }
 
+/** What a chat's avatar is drawn from. */
+export interface ChatFace {
+  name: string;
+  imageUrl: string | null;
+  /** Members of a group, for when it has no photo of its own. */
+  members?: AvatarPerson[];
+}
+
 interface AvatarProps {
   /** Shown as an initial when there is no picture. */
   name: string;
