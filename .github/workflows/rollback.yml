@@ -19,10 +19,7 @@ env:
 
 jobs:
   rollback:
-    # Pinned while GitHub's ubuntu-24.04 (ubuntu-latest) pool is failing to
-    # assign runners (Actions incident, 2026-10-05). Same architecture and
-    # tooling; go back to ubuntu-latest once that pool is healthy.
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       packages: write
 
