@@ -24,6 +24,7 @@ import { ChatRail, orderForRail } from "@/components/chat/ChatRail";
 import { ServerBanner, ServerPanel } from "@/components/ServerPanel";
 import { startServerMonitor, stopServerMonitor } from "@/services/serverStatus";
 import { deriveHealth, useServerStatusStore } from "@/stores/serverStatusStore";
+import { countUnread, tabIndicator } from "@/services/tabIndicator";
 
 const CHAT_ROW_HEIGHT = 72;
 const SIDEBAR_WIDTH = 320;
@@ -126,6 +127,12 @@ export default function ChatsLayout({ children }: { children: React.ReactNode })
   const serverUnreachable = useServerStatusStore((s) => s.unreachable);
   const serverAction = useServerStatusStore((s) => s.action);
   const health = deriveHealth({ socketState, info: serverInfo, unreachable: serverUnreachable, action: serverAction });
+  // The browser tab shows unread state too, so it can be seen without switching to it
+  const unreadCount = useChatStore((s) => countUnread(s.chats));
+  useEffect(() => {
+    tabIndicator.update(unreadCount);
+  }, [unreadCount]);
+  useEffect(() => () => tabIndicator.dispose(), []);
   const [collapsed, setCollapsed] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; chatGuid: string } | null>(null);
   const [chatIconUrls, setChatIconUrls] = useState<Record<string, string>>({});
